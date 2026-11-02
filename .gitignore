@@ -51,3 +51,7 @@ modules/*/android/.gradle/
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# Orb captures, local test APKs and portal runtime state
+/.amp/in/
+/.amp/portals/

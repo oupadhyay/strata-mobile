@@ -1,0 +1,16 @@
+# Sourced by setup, the APK builder and repository-scoped login shells.
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/.local/share/android-sdk}}"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+
+for _strata_android_path in \
+  "$JAVA_HOME/bin" \
+  "$ANDROID_HOME/cmdline-tools/latest/bin" \
+  "$ANDROID_HOME/platform-tools" \
+  "$HOME/.local/share/strata-build-tools/node_modules/.bin"; do
+  case ":$PATH:" in
+    *":$_strata_android_path:"*) ;;
+    *) export PATH="$_strata_android_path:$PATH" ;;
+  esac
+done
+unset _strata_android_path

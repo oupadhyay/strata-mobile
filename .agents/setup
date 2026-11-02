@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+SECONDS=0
+log() { printf '\n[%ss] %s\n' "$SECONDS" "$*"; }
+
+log "Checking Android build prerequisites"
+missing=()
+for package in openjdk-17-jdk-headless ca-certificates curl unzip; do
+  if [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)" != "install ok installed" ]]; then
+    missing+=("$package")
+  fi
+done
+if ((${#missing[@]})); then
+  sudo -n apt-get update
+  sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+fi
+
+# shellcheck source=.agents/android-env
+source "$repo_root/.agents/android-env"
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+
+log "Preparing Android SDK 36, NDK 27.1 and CMake 3.22.1"
+android="$ANDROID_HOME/cmdline-tools/latest/bin/android"
+if [[ ! -x "$android" ]]; then
+  curl --fail --location --retry 2 --connect-timeout 15 --max-time 300 \
+    --output "$scratch/commandlinetools.zip" \
+    https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
+  printf '%s  %s\n' \
+    4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583 \
+    "$scratch/commandlinetools.zip" | sha256sum --check
+  unzip -q "$scratch/commandlinetools.zip" -d "$scratch"
+  mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
+  cp -a "$scratch/cmdline-tools/." "$ANDROID_HOME/cmdline-tools/latest/"
+fi
+
+# Match Expo SDK 57 / React Native 0.86 and the tested standalone APK.
+packages=(platform-tools platforms/android-36 build-tools/36.0.0 ndk/27.1.12297006 cmake/3.22.1)
+printf 'y\n%.0s' {1..100} > "$scratch/license-answers"
+for package in "${packages[@]}"; do
+  if [[ ! -f "$ANDROID_HOME/$package/package.xml" ]]; then
+    "$android" --no-metrics --sdk="$ANDROID_HOME" sdk install "$package" < "$scratch/license-answers"
+  fi
+done
+
+log "Installing locked JavaScript dependencies"
+pnpm_version="$(node -p 'require(process.argv[1]).packageManager.split("@")[1]' "$repo_root/package.json")"
+if ! command -v pnpm >/dev/null || [[ "$(pnpm --version)" != "$pnpm_version" ]]; then
+  npm install --prefix "$HOME/.local/share/strata-build-tools" --no-audit --no-fund "pnpm@$pnpm_version"
+fi
+pnpm --dir "$repo_root" install --frozen-lockfile
+if [[ ! -f "$repo_root/expo-env.d.ts" ]]; then
+  printf '/// <reference types="expo/types" />\n' > "$repo_root/expo-env.d.ts"
+fi
+
+log "Persisting the Android environment for this repository"
+marker="# strata-mobile Android environment: $repo_root"
+if ! grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >> "$HOME/.bash_profile" <<EOF
+
+$marker
+case "\$PWD/" in
+  "$repo_root/"*) . "$repo_root/.agents/android-env" ;;
+esac
+EOF
+fi
+
+log "Android setup ready; build a test APK with ./scripts/build-test-apk.sh"

@@ -16,6 +16,8 @@ Expo ships breaking changes every SDK release. APIs you remember are likely rena
 
 | Command | What it does |
 |---|---|
+| `./.agents/setup` | Prepare the Android SDK, Java and locked dependencies in a Debian x64 orb; safe to rerun |
+| `./scripts/build-test-apk.sh` | Build and verify a standalone ARM64 test APK with bounded Metro/native/R8/lint memory; never installs or publishes |
 | `pnpm install` | Install dependencies |
 | `pnpm start` | Dev server (`expo start`) |
 | `pnpm android` | `expo run:android`: build and run a development build on an emulator or a device (needs Android Studio) |

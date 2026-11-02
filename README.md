@@ -61,6 +61,21 @@ pnpm install && pnpm android
 Expo SDK 57 with a development build (Health Connect is a native module, so not Expo Go). [CONTRIBUTING.md](CONTRIBUTING.md) and
 [AGENTS.md](AGENTS.md) have the rest; releases are in [docs/releases.md](docs/releases.md).
 
+### Strata test APKs in Amp orbs
+
+From this repository's root on a Debian 12 x64 orb:
+
+```sh
+./.agents/setup
+./scripts/build-test-apk.sh
+```
+
+Setup installs Java 17, Android SDK/build tools 36, NDK 27.1.12297006, CMake 3.22.1 and the locked pnpm dependencies. It downloads checksum-verified command-line tools only when missing and accepts the SDK licenses needed for the build. The orb supplies Node.js; pnpm follows `package.json`. A repository-scoped login hook exposes the Android environment to later shells. Setup is safe to rerun and does not compile an APK or start services.
+
+The separate builder generates Android through Expo and serializes native compilation. It prepares JavaScript and sources with a 1 GB Gradle heap, one Metro worker and a 1.5 GB Node heap cap, runs R8 with a 2 GB Gradle heap, then assembles with a 1 GB heap so vital lint still fits a 4 GB orb. It verifies signing, ZIP alignment and archive integrity, then saves `.amp/in/artifacts/strata-test-<version>-arm64-v8a.apk`. It embeds Hermes, needs no Metro server or EAS account, and does not install or publish anything. The APK uses the template debug key for personal sideloaded testing, not production signing. The first build still downloads Gradle/Maven dependencies and compiles native code; later builds reuse those caches. Do not hand-edit the ignored `android/` directory.
+
+Amp automatically runs `.agents/setup` only when this fork is the primary project repository. A parent or multi-repository project must invoke it from its own setup. No resume hook is needed: there are no services or authentication to restore.
+
 ## License
 
 [PolyForm Noncommercial 1.0.0](LICENSE) · [Security](SECURITY.md) · [Code of Conduct](CODE_OF_CONDUCT.md)
