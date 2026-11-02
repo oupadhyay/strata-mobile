@@ -1,5 +1,5 @@
-// The nutrition targets: protein at 1.6 g per kg of the latest weight (a healthy weight for the height, else 100 g,
-// without one), calories at the average burn (2,000 without it), fat and carbs from those, and the person's own numbers.
+// Protein uses stored kg regardless of display units; calorie suggestions use inferred maintenance, never wearable
+// burn. Until calibrated the food-label reference is explicit, and the person's chosen target always wins.
 import { describe, expect, it } from "vitest";
 import { calorieTarget, DEFAULT_KCAL, DEFAULT_PROTEIN_G, NO_CUSTOM, parseCustomTargets, parseTarget, progressOf, proteinTarget, resolveTargets, validateTarget } from "./targets";
 
@@ -17,24 +17,32 @@ describe("protein target", () => {
     // An implausible reading is no weight.
     expect(proteinTarget(4, null).value).toBe(DEFAULT_PROTEIN_G);
   });
+
+  it("converts the explanation, not the protein calculation, to the selected units", () => {
+    const metric = proteinTarget(72.4, 178, "metric");
+    const imperial = proteinTarget(72.4, 178, "imperial");
+    expect(imperial.value).toBe(metric.value);
+    expect(imperial.basis).toBe("0.73 g per lb at 159.6 lb");
+    expect(proteinTarget(null, 165, "imperial").basis).toContain("65.0 in (132 lb)");
+  });
 });
 
 describe("calorie target", () => {
-  it("is the average burn of the last 14 days, to the nearest 50", () => {
-    expect(calorieTarget([2310, 2420, null, 2390])).toMatchObject({ value: 2350, custom: false });
-    // Only the last 14 days count; nearly empty days (band off) are left out.
-    expect(calorieTarget([...Array(10).fill(4000), ...Array(14).fill(2000), 300]).value).toBe(2000);
+  it("rounds inferred maintenance to the nearest 50 without claiming a weight-loss goal", () => {
+    expect(calorieTarget(2374)).toMatchObject({ value: 2350, custom: false });
+    expect(calorieTarget(2375).value).toBe(2400);
+    expect(calorieTarget(2375).basis).toContain("not a chosen weight-loss target");
   });
 
-  it("needs three days, else uses 2,000", () => {
-    expect(calorieTarget([2500, 2600]).value).toBe(DEFAULT_KCAL);
-    expect(calorieTarget([]).value).toBe(DEFAULT_KCAL);
+  it("labels an unknown estimate as a non-personalized reference", () => {
+    expect(calorieTarget(null)).toMatchObject({ value: DEFAULT_KCAL, custom: false });
+    expect(calorieTarget(null).basis).toContain("not a personalized estimate");
   });
 });
 
 describe("all targets", () => {
   it("sets fat at 30 % of the calories and carbs from what is left", () => {
-    const t = resolveTargets(NO_CUSTOM, { weightKg: 70, heightCm: 175, burned: Array(14).fill(2200) });
+    const t = resolveTargets(NO_CUSTOM, { weightKg: 70, heightCm: 175, expenditureKcal: 2200 });
     expect(t.kcal.value).toBe(2200);
     expect(t.protein.value).toBe(112);
     expect(t.fat.value).toBe(73);
@@ -42,13 +50,13 @@ describe("all targets", () => {
   });
 
   it("takes the person's own numbers, and the rest follows them", () => {
-    const t = resolveTargets({ kcal: 1800, protein: 150, carbs: null, fat: 50 }, { weightKg: 70, heightCm: null, burned: [] });
+    const t = resolveTargets({ kcal: 1800, protein: 150, carbs: null, fat: 50 }, { weightKg: 70, heightCm: null, expenditureKcal: 3250 });
     expect(t.kcal).toEqual({ value: 1800, custom: true, basis: "Your target" });
     expect(t.protein.value).toBe(150);
     expect(t.fat.value).toBe(50);
     expect(t.carbs).toMatchObject({ value: Math.round((1800 - 600 - 450) / 4), custom: false });
     // Never a negative carb target.
-    expect(resolveTargets({ kcal: 1000, protein: 300, carbs: null, fat: null }, { weightKg: null, heightCm: null, burned: [] }).carbs.value).toBe(0);
+    expect(resolveTargets({ kcal: 1000, protein: 300, carbs: null, fat: null }, { weightKg: null, heightCm: null, expenditureKcal: null }).carbs.value).toBe(0);
   });
 
   it("measures progress up to full", () => {

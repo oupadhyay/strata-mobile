@@ -53,8 +53,9 @@ export { forgetChanges };
  * and a sync that finds deletions replaces the window it re-reads (see replaceWindow). 7: the source policy is gone; every
  * app's records are kept, the largest source per day for measured totals. 8: near-identical workouts from different
  * apps are imported once, retaining distinct sports, partial overlaps and records with no source.
+ * 9: nutrition uses one origin per day (Lose It!, then MyFitnessPal preferred) and records missing calorie coverage.
  */
-export const IMPORT_VERSION = 8;
+export const IMPORT_VERSION = 9;
 
 /**
  * How far before the window's first local midnight the reads start. Health Connect returns a record only to a read whose

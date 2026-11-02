@@ -272,6 +272,16 @@ export async function setDisplay(display: DisplayPrefs): Promise<void> {
   dataChanged();
 }
 
+/** Nutrition-only preferences do not change stored recovery/strain scores or write to Health Connect. */
+export async function setNutrition(nutrition: NonNullable<Profile["nutrition"]>): Promise<void> {
+  const { store, profile } = state;
+  if (!store || !profile) return;
+  const p = { ...profile, nutrition };
+  await store.setProfile(p);
+  patch({ profile: p });
+  dataChanged();
+}
+
 /** Starts i18next and the formatters' locale in what `choice` means (the phone's language for "auto"). */
 async function applyLanguage(choice: LanguageChoice): Promise<void> {
   const language = resolveChoice(choice);

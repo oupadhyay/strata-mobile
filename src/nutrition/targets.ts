@@ -3,13 +3,14 @@
 //  - protein: 1.6 g per kg of their latest weight (the point past which more protein stopped adding lean mass in
 //    resistance-trained adults, Morton et al. 2018, Br J Sports Med); with no weight reading, the same per kg of a
 //    healthy weight for their height (BMI 22); with neither, 100 g;
-//  - calories: what they burned a day, on average, over the 14 days before today (their maintenance), with at least
-//    3 days of it; else the 2,000 kcal food labels use;
+//  - calories: maintenance inferred from intake and weight; until calibrated, the explicitly non-personalized
+//    2,000 kcal food-label reference. Wearable calorie burn never raises the food budget;
 //  - fat: 30 % of the calories (inside the 20-35 % the dietary guidelines give);
 //  - carbs: the calories left after protein and fat.
 // No React or database, so the tests run in node. The "basis" sentences and errors are translated here (nutrition, errors).
 import { localeFixed } from "@/lib/locale";
 import { i18n } from "@/i18n/config";
+import { quantity, type UnitSystem } from "@/lib/units";
 
 export const TARGET_KEYS = ["kcal", "protein", "carbs", "fat"] as const;
 export type TargetKey = (typeof TARGET_KEYS)[number];
@@ -23,9 +24,6 @@ export const REFERENCE_BMI = 22;
 export const DEFAULT_PROTEIN_G = 100;
 export const DEFAULT_KCAL = 2000;
 export const FAT_SHARE = 0.3;
-/** Days of calories burned the calorie suggestion averages, and how many it needs. */
-export const BURN_DAYS = 14;
-export const MIN_BURN_DAYS = 3;
 
 export type TargetLimit = { min: number; max: number; unit: string };
 export const TARGET_LIMITS: Record<TargetKey, TargetLimit> = {
@@ -43,36 +41,32 @@ const group = (v: number) => new Intl.NumberFormat("en-US", { maximumFractionDig
 const kg1 = (v: number) => localeFixed(Math.round(v * 10) / 10, 1);
 
 /** The protein suggestion: 1.6 g per kg of the latest weight, else of a healthy weight for the height, else 100 g. */
-export function proteinTarget(weightKg: number | null, heightCm: number | null): Target {
+export function proteinTarget(weightKg: number | null, heightCm: number | null, units?: UnitSystem): Target {
+  const q = quantity("kg", units);
   if (weightKg !== null && Number.isFinite(weightKg) && weightKg >= 20 && weightKg <= 300) {
-    return { value: Math.round(weightKg * PROTEIN_G_PER_KG), custom: false, basis: i18n.t("nutrition:basis.proteinWeight", { perKg: PROTEIN_G_PER_KG, kg: kg1(weightKg) }) };
+    return { value: Math.round(weightKg * PROTEIN_G_PER_KG), custom: false, basis: i18n.t("energy:proteinWeight", { per: localeFixed(PROTEIN_G_PER_KG / q.change(1), q.unit === "kg" ? 1 : 2), weight: kg1(q.value(weightKg)), unit: q.unit }) };
   }
   if (heightCm !== null && Number.isFinite(heightCm) && heightCm >= 100 && heightCm <= 250) {
     const kg = REFERENCE_BMI * (heightCm / 100) ** 2;
-    return { value: Math.round(kg * PROTEIN_G_PER_KG), custom: false, basis: i18n.t("nutrition:basis.proteinHeight", { perKg: PROTEIN_G_PER_KG, cm: Math.round(heightCm), kg: Math.round(kg) }) };
+    const h = quantity("cm", units);
+    return { value: Math.round(kg * PROTEIN_G_PER_KG), custom: false, basis: i18n.t("energy:proteinHeight", { height: localeFixed(h.value(heightCm), h.unit === "cm" ? 0 : 1), heightUnit: h.unit, weight: Math.round(q.value(kg)), unit: q.unit }) };
   }
   return { value: DEFAULT_PROTEIN_G, custom: false, basis: i18n.t("nutrition:basis.proteinDefault", { perKg: PROTEIN_G_PER_KG }) };
 }
 
-/** Plausible days of total calories burned (a day the band was barely worn reads far lower). */
-const usableBurn = (v: number | null | undefined): v is number => typeof v === "number" && Number.isFinite(v) && v >= 800 && v <= 8000;
-
-/** The calorie suggestion: the average burn over `burned` (oldest first, the days before today), else 2,000. */
-export function calorieTarget(burned: (number | null | undefined)[]): Target {
-  const days = burned.slice(-BURN_DAYS).filter(usableBurn);
-  if (days.length >= MIN_BURN_DAYS) {
-    const mean = days.reduce((a, b) => a + b, 0) / days.length;
-    const value = Math.min(5000, Math.max(1200, Math.round(mean / 50) * 50));
-    return { value, custom: false, basis: i18n.t("nutrition:basis.kcalBurn", { count: days.length }) };
+/** Maintenance is a reference, not a chosen weight-loss goal. The person's own calorie target always wins. */
+export function calorieTarget(expenditureKcal: number | null): Target {
+  if (expenditureKcal !== null && Number.isFinite(expenditureKcal) && expenditureKcal >= 800 && expenditureKcal <= 8000) {
+    return { value: Math.round(expenditureKcal / 50) * 50, custom: false, basis: i18n.t("energy:maintenanceBasis") };
   }
-  return { value: DEFAULT_KCAL, custom: false, basis: i18n.t("nutrition:basis.kcalDefault") };
+  return { value: DEFAULT_KCAL, custom: false, basis: i18n.t("energy:referenceBasis") };
 }
 
 /** Every target: the person's own where set, else the suggestions (fat and carbs follow the calories and protein). */
-export function resolveTargets(custom: CustomTargets, input: { weightKg: number | null; heightCm: number | null; burned: (number | null | undefined)[] }): Targets {
+export function resolveTargets(custom: CustomTargets, input: { weightKg: number | null; heightCm: number | null; expenditureKcal: number | null; units?: UnitSystem }): Targets {
   const own = (k: TargetKey): Target | null => (custom[k] !== null ? { value: custom[k], custom: true, basis: i18n.t("nutrition:basis.own") } : null);
-  const kcal = own("kcal") ?? calorieTarget(input.burned);
-  const protein = own("protein") ?? proteinTarget(input.weightKg, input.heightCm);
+  const kcal = own("kcal") ?? calorieTarget(input.expenditureKcal);
+  const protein = own("protein") ?? proteinTarget(input.weightKg, input.heightCm, input.units);
   const fat = own("fat") ?? { value: Math.round((kcal.value * FAT_SHARE) / 9), custom: false, basis: i18n.t("nutrition:basis.fat", { pct: Math.round(FAT_SHARE * 100), kcal: group(kcal.value) }) };
   const left = kcal.value - protein.value * 4 - fat.value * 9;
   const carbs = own("carbs") ?? { value: Math.max(0, Math.round(left / 4)), custom: false, basis: i18n.t("nutrition:basis.carbs") };

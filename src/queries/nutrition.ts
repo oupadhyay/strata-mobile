@@ -1,16 +1,16 @@
-// Nutrition `/nutrition` (a phone-only screen): today's calories and macros against the person's targets, their 7- and
-// 30-day averages, 30 days of daily protein and calories, and today's food, Pulse's entries (editable) beside those
-// read from Health Connect (logged in Fitbit). Every number is counted as the metric screens count it: the source's
-// daily roll-up plus Pulse's own entries, a meal logged in both apps once (food.ts).
+// Nutrition `/nutrition`: one local day's calories and macros, daily history, and an intake/weight expenditure model.
+// The source's daily roll-up plus existing Pulse food entries count a duplicated meal once (food.ts). The original
+// meal and wearable balance fields remain available to existing callers; the companion screen uses `energy`.
 import { metricsWithLoggedBody } from "@/data/body";
 import { i18n } from "@/i18n/config";
 import { addDays, localMidnight } from "@/lib/time";
 import type { Metric } from "@/lib/reasons";
 import { balanceOf, zoneOf, type BalanceZone } from "@/nutrition/balance";
-import { BURN_DAYS, NO_CUSTOM, resolveTargets, type CustomTargets, type Targets } from "@/nutrition/targets";
+import { NO_CUSTOM, resolveTargets, type CustomTargets, type Targets } from "@/nutrition/targets";
 import { type DayRow, finite, loadDays, type QueryCtx, todayOf } from "./common";
 import { countedPulse, EMPTY_TOTALS, foodEntry, mealOverlaps, roundNutrient, sumFood, type FoodEntry, type FoodVia, type Totals } from "./food";
 import { MEALS, type Meal } from "./log";
+import { getNutritionEnergy, intakeOf } from "./nutritionExtras";
 
 /** The nutrients the overview averages and charts (fiber is Pulse's alone, so it shows only in today's total). */
 export const MACROS = ["kcal", "protein", "carbs", "fat"] as const;
@@ -67,17 +67,18 @@ export type CalorieBalance = {
 
 export type NutritionVM = {
   today: string;
+  day: string;
   timeZone: string;
-  /** Today so far, as the metrics count it. */
+  /** The selected day's totals; incomplete calorie coverage stays null. */
   totals: Totals;
   /** The targets in force: the person's own where set, else Pulse's suggestion. */
   targets: Targets;
   /** Pulse's suggestions alone (the edit sheet's placeholders). */
   suggested: Targets;
-  /** The 7 and 30 days before today (today is still running, so it never counts in an average). */
+  /** The 7 and 30 days before the selected day; incomplete or reviewed partial days do not count. */
   week: Averages;
   month: Averages;
-  /** 30 days ending today, oldest first; today's running totals are provisional. */
+  /** 30 days ending on the selected day, oldest first; today's running totals are provisional. */
   history: { day: string; kcal: number | null; protein: number | null; provisional?: true }[];
   /** Today's food by meal, in meal order. */
   meals: MealGroup[];
@@ -88,6 +89,7 @@ export type NutritionVM = {
   unlisted: Totals | null;
   /** Calories in vs. out, today and the last 7 days. */
   balance: CalorieBalance;
+  energy: Awaited<ReturnType<typeof getNutritionEnergy>>;
   /** Today has food logged in Pulse (some counted, some maybe repeats). */
   pulseToday: number;
 };
@@ -95,8 +97,8 @@ export type NutritionVM = {
 /** A meal's name, read when called so it follows the language in use (the meal names are Journal's). */
 const mealLabel = (meal: Meal | "UNKNOWN"): string => (meal === "UNKNOWN" ? i18n.t("nutrition:meal.other") : (MEALS.find((m) => m[0] === meal)?.[1] ?? meal));
 const MEAL_ORDER: (Meal | "UNKNOWN")[] = ["BREAKFAST", "LUNCH", "DINNER", "SNACK", "UNKNOWN"];
-const FOOD_PICK: Record<Macro, (r: DayRow) => number | undefined> = {
-  kcal: (r) => r.extra.calories_in,
+const FOOD_PICK: Record<Macro, (r: DayRow) => number | null | undefined> = {
+  kcal: (r) => intakeOf(r),
   protein: (r) => r.extra.protein,
   carbs: (r) => r.extra.carbs,
   fat: (r) => r.extra.fat,
@@ -114,16 +116,6 @@ export function averagesOf(rows: (DayRow | undefined)[], span: number): Averages
     if (m === "kcal") out.days = xs.length;
   }
   return out;
-}
-
-/** The latest weight on or before `day`, logged in Pulse or synced. */
-async function latestWeight(ctx: QueryCtx, day: string): Promise<number | null> {
-  const rows = await metricsWithLoggedBody(ctx.store);
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const r = rows[i];
-    if (r.day <= day && finite(r.weightKg)) return r.weightKg;
-  }
-  return null;
 }
 
 const itemOf = (e: FoodEntry, dup: Map<string, string>): FoodItem => ({
@@ -171,30 +163,39 @@ export function calorieBalance(rows: Map<string, DayRow>, today: string, goal: n
   return { goal, kcalIn: metric(t.kcalIn), kcalOut: metric(t.kcalOut), net: balanceOf(t.kcalIn, t.kcalOut), days };
 }
 
-/** Nutrition for today, against `custom` targets (the person's own; null fields follow Pulse's suggestion). */
-export async function getNutrition(ctx: QueryCtx, custom: CustomTargets): Promise<NutritionVM> {
+/** Nutrition for one local day; future data never changes an earlier day's energy-balance estimate. */
+export async function getNutrition(ctx: QueryCtx, custom: CustomTargets, day = todayOf(ctx)): Promise<NutritionVM> {
   const today = todayOf(ctx);
-  const from = addDays(today, -30);
-  const [rows, weightKg, logged, synced] = await Promise.all([
-    loadDays(ctx, from, today),
-    latestWeight(ctx, today),
-    ctx.store.loggedEntries(localMidnight(today, ctx.timeZone), 10_000),
-    ctx.store.dailyValues({ from: today, to: today }),
+  const weights = (await metricsWithLoggedBody(ctx.store)).filter((r) => r.day <= day && finite(r.weightKg));
+  const weightKg = weights.at(-1)?.weightKg ?? null;
+  // A fixed start at the first weigh-in keeps the EWMA identical when browsing history or appending new days.
+  const from = weights[0]?.day < addDays(day, -30) ? weights[0].day : addDays(day, -30);
+  const [rows, logged, synced] = await Promise.all([
+    loadDays(ctx, from, day),
+    ctx.store.loggedEntries(localMidnight(day, ctx.timeZone), 10_000),
+    ctx.store.dailyValues({ from: day, to: day }),
   ]);
-  const before = (n: number) => Array.from({ length: n }, (_, k) => rows.get(addDays(today, -n + k)));
+  const energy = await getNutritionEnergy(ctx, rows, day, custom.kcal);
+  const excluded = new Set(ctx.profile.nutrition?.excludedDays ?? []);
+  const before = (n: number) => Array.from({ length: n }, (_, k) => {
+    const d = addDays(day, -n + k);
+    const r = rows.get(d);
+    return excluded.has(d) || (r?.extra.nutrition_missing_energy ?? 0) > 0 ? undefined : r;
+  });
 
   const entries = logged.flatMap((r) => {
-    const e = r.day === today ? foodEntry(r) : null;
+    const e = r.day === day ? foodEntry(r) : null;
     return e ? [e] : [];
   });
   const { counted } = countedPulse(entries);
-  const row = rows.get(today);
+  const row = rows.get(day);
   const pulse = sumFood(counted);
   const totals: Totals = { kcal: null, protein: null, carbs: null, fat: null, fiber: pulse.fiber };
   for (const m of MACROS) {
     const v = row ? FOOD_PICK[m](row) : undefined;
     totals[m] = finite(v) ? v : null;
   }
+  if (energy.excluded) totals.kcal = null;
 
   // The roll-up beyond the Fitbit entries listed: with Health Connect they match; a Google account sends totals only.
   const listed = sumFood(entries.filter((e) => e.source !== "pulse"));
@@ -211,28 +212,29 @@ export async function getNutrition(ctx: QueryCtx, custom: CustomTargets): Promis
     }
   }
 
-  const basis = { weightKg, heightCm: ctx.profile.heightCm, burned: before(BURN_DAYS).map((r) => r?.metrics?.calories) };
+  const basis = { weightKg, heightCm: ctx.profile.heightCm, expenditureKcal: energy.tdee.value, units: ctx.profile.display?.units };
   const targets = resolveTargets(custom, basis);
   return {
     today,
+    day,
     timeZone: ctx.timeZone,
     totals,
     targets,
-    balance: calorieBalance(rows, today, targets.kcal.value),
+    balance: calorieBalance(rows, day, targets.kcal.value),
+    energy,
     suggested: resolveTargets(NO_CUSTOM, basis),
     week: averagesOf(before(7), 7),
     month: averagesOf(before(30), 30),
     history: Array.from({ length: 30 }, (_, k) => {
-      const day = addDays(today, k - 29);
-      const r = rows.get(day);
-      const kcal = r?.extra.calories_in;
+      const d = addDays(day, k - 29);
+      const r = rows.get(d);
+      const kcal = intakeOf(r, excluded.has(d));
       const protein = r?.extra.protein;
       const shown = finite(kcal) || finite(protein);
-      return { day, kcal: finite(kcal) ? kcal : null, protein: finite(protein) ? protein : null, ...(day === today && shown && { provisional: true as const }) };
+      return { day: d, kcal: finite(kcal) ? kcal : null, protein: finite(protein) ? protein : null, ...(d === today && shown && { provisional: true as const }) };
     }),
     meals: mealGroups(entries),
     unlisted: more ? unlisted : null,
     pulseToday: entries.filter((e) => e.source === "pulse").length,
   };
 }
-

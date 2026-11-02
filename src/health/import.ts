@@ -628,6 +628,52 @@ function meanPerDay<T extends { time: string }>(records: T[], value: (r: T) => n
   return new Map([...acc].map(([day, a]) => [day, a.sum / a.n]));
 }
 
+type NutritionDay = { origin: string; totals: Partial<Record<"calories_in" | "protein" | "carbs" | "fat" | "nutrition_missing_energy", number>> };
+// Lose It! is the food logger. Prefer its records, then MyFitnessPal; never add their mirrored Fitbit records on top.
+const FOOD_ORIGINS = ["com.fitnow.loseit", "com.myfitnesspal.android"];
+
+/** The native bridge serializes absent energy as zero. Positive macros with zero energy are not a zero-calorie meal. */
+function foodEnergy(r: NutritionRecord): number | null {
+  const kcal = r.energy?.inKilocalories;
+  return typeof kcal === "number" && Number.isFinite(kcal) && kcal > 0 ? kcal : null;
+}
+
+/** Keep all nutrients from the same origin on each local day. Unknown energy is retained as a coverage flag. */
+function* nutritionDays(records: NutritionRecord[], tz: string): Steps<Map<string, NutritionDay>> {
+  const days = new Map<string, Map<string, NutritionDay>>();
+  let n = 0;
+  for (const r of records) {
+    if (++n % PAUSE_EVERY === 0) yield;
+    const kcal = foodEnergy(r);
+    const protein = r.protein?.inGrams ?? 0;
+    const carbs = r.totalCarbohydrate?.inGrams ?? 0;
+    const fat = r.totalFat?.inGrams ?? 0;
+    if (kcal === null && !(protein > 0 || carbs > 0 || fat > 0)) continue;
+    const origin = r.metadata?.dataOrigin ?? "";
+    for (const { day, share } of spreadOverDays(interval(r), tz)) {
+      let sources = days.get(day);
+      if (!sources) days.set(day, (sources = new Map()));
+      let source = sources.get(origin);
+      if (!source) sources.set(origin, (source = { origin, totals: {} }));
+      const add = (key: keyof NutritionDay["totals"], v: number) => {
+        if (Number.isFinite(v) && v > 0) source.totals[key] = (source.totals[key] ?? 0) + v * share;
+      };
+      if (kcal !== null) add("calories_in", kcal);
+      // Coverage is a flag, not a quantity to pro-rate: even one minute must survive daily rounding.
+      else source.totals.nutrition_missing_energy = 1;
+      add("protein", protein);
+      add("carbs", carbs);
+      add("fat", fat);
+    }
+  }
+  return new Map([...days].map(([day, sources]) => {
+    const preferred = FOOD_ORIGINS.map((o) => sources.get(o)).find((s) => s !== undefined);
+    // With neither preferred logger, retain one source's whole daily total (the existing measured-total policy).
+    const chosen = preferred ?? [...sources.values()].sort((a, b) => (b.totals.calories_in ?? 0) - (a.totals.calories_in ?? 0) || a.origin.localeCompare(b.origin))[0];
+    return [day, chosen];
+  }));
+}
+
 /**
  * The web's extra-metric keys and units (its EXTRA map over Google's roll-ups): distance km (2 dp), active calories
  * kcal, floors, elevation m, water ml, calories eaten kcal, protein / carbs / fat g, glucose mg/dL and core temperature
@@ -650,6 +696,7 @@ export const SOURCE_DAILY_KEYS: Readonly<Record<string, ReadType>> = {
   protein: "Nutrition",
   carbs: "Nutrition",
   fat: "Nutrition",
+  nutrition_missing_energy: "Nutrition",
   glucose: "BloodGlucose",
   core_temp: "BodyTemperature",
 };
@@ -665,10 +712,9 @@ export function* mapDailyValuesSteps(input: HealthInput, tz: string): Steps<Dail
   push(yield* sumPerDay(input.FloorsClimbed ?? [], (r) => r.floors, tz, true), "floors", round1);
   push(yield* sumPerDay(input.ElevationGained ?? [], (r) => r.elevation.inMeters, tz, true), "elevation", round1);
   push(yield* sumPerDay(input.Hydration ?? [], (r) => r.volume.inMilliliters, tz), "water", Math.round);
-  push(yield* sumPerDay(nutrition, (r) => r.energy?.inKilocalories ?? 0, tz), "calories_in", Math.round);
-  push(yield* sumPerDay(nutrition, (r) => r.protein?.inGrams ?? 0, tz), "protein", round1);
-  push(yield* sumPerDay(nutrition, (r) => r.totalCarbohydrate?.inGrams ?? 0, tz), "carbs", round1);
-  push(yield* sumPerDay(nutrition, (r) => r.totalFat?.inGrams ?? 0, tz), "fat", round1);
+  for (const [day, source] of yield* nutritionDays(nutrition, tz)) {
+    for (const [key, value] of Object.entries(source.totals)) out.push({ day, key, value: key === "calories_in" ? Math.round(value) : round1(value) });
+  }
   push(meanPerDay(input.BloodGlucose ?? [], (r) => r.level.inMilligramsPerDeciliter, tz), "glucose", round1);
   push(meanPerDay(input.BodyTemperature ?? [], (r) => r.temperature.inCelsius, tz), "core_temp", round2);
   return out.sort((a, b) => a.day.localeCompare(b.day) || a.key.localeCompare(b.key));
@@ -733,13 +779,19 @@ export function mapExternalEntries(input: HealthInput, tz: string): LoggedEntryR
     out.push(row(recordId(r, "water", t), "hydration-log", t, { ml }));
   }
 
+  const nutrition = finish(nutritionDays(input.Nutrition ?? [], tz));
   for (const r of input.Nutrition ?? []) {
     const t = ts(r.startTime);
+    const day = localDay(t, tz);
+    if (nutrition.get(day)?.origin !== (r.metadata?.dataOrigin ?? "")) continue;
+    const kcal = foodEnergy(r);
+    // Macro-only records remain in the daily totals and coverage flag, not as invented zero-calorie foods.
+    if (kcal === null) continue;
     const grams = (m: { inGrams: number } | undefined) => (m && m.inGrams > 0 ? round1(m.inGrams) : null);
     const data = {
       name: r.name?.trim() || null,
       meal: MEAL_NAME[r.mealType] ?? "UNKNOWN",
-      kcal: Math.max(0, Math.round(r.energy?.inKilocalories ?? 0)),
+      kcal: Math.round(kcal),
       protein: grams(r.protein),
       carbs: grams(r.totalCarbohydrate),
       fat: grams(r.totalFat),

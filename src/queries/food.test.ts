@@ -225,9 +225,11 @@ describe("Nutrition overview", () => {
     const vm = await getNutrition(ctx, NO_CUSTOM);
     expect(vm.totals).toEqual({ kcal: 800, protein: 43, carbs: 12, fat: 33, fiber: 3 });
     expect(vm.targets.protein).toMatchObject({ value: 128, custom: false });
-    expect(vm.targets.kcal).toMatchObject({ value: 2400, custom: false });
-    expect(vm.targets.fat.value).toBe(80);
-    expect(vm.targets.carbs.value).toBe(292);
+    // Wearable burn alone cannot calibrate an intake/weight model or increase a calorie budget.
+    expect(vm.energy.tdee.value).toBeNull();
+    expect(vm.targets.kcal).toMatchObject({ value: 2000, custom: false });
+    expect(vm.targets.fat.value).toBe(67);
+    expect(vm.targets.carbs.value).toBe(221);
     expect(vm.week).toEqual({ kcal: 2000, protein: 100, carbs: 250, fat: 60, days: 7, span: 7 });
     expect(vm.month).toMatchObject({ kcal: 2000, days: 7, span: 30 });
     expect(vm.history).toHaveLength(30);
@@ -263,6 +265,7 @@ describe("Nutrition overview", () => {
     expect(vm.meals).toEqual([]);
     expect(vm.week).toMatchObject({ kcal: null, days: 0 });
     expect(vm.targets.kcal.value).toBe(2000);
+    expect(vm.energy).toMatchObject({ state: "calibrating", tdee: { value: null }, deficit: null, weight: { value: null }, planCandidate: null });
     // No weight: a healthy weight for the profile's 178 cm.
     expect(vm.targets.protein.value).toBe(Math.round(22 * 1.78 ** 2 * 1.6));
   });

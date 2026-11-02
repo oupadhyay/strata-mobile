@@ -526,6 +526,54 @@ describe("extras and the Fitbit log", () => {
     ]);
   });
 
+  it("keeps one coherent nutrition origin per day: Lose It!, then MyFitnessPal, then the largest fallback", () => {
+    const food = (id: string, day: string, origin: string, kcal: number, protein: number, carbs: number, fat: number) => ({
+      metadata: meta(id, origin), startTime: at(day, "13:00:00"), endTime: at(day, "13:00:00"), mealType: MealType.LUNCH,
+      energy: energy(kcal), protein: mass(protein), totalCarbohydrate: mass(carbs), totalFat: mass(fat),
+    });
+    const records = [
+      food("li1", "2026-10-02", "com.fitnow.loseit", 600, 21, 70, 10),
+      food("li2", "2026-10-02", "com.fitnow.loseit", 100, 5, 13, 1),
+      food("m1", "2026-10-02", "com.myfitnesspal.android", 1900, 150, 200, 60),
+      food("f1", "2026-10-02", "com.fitbit.FitbitMobile", 2700, 80, 350, 80),
+      food("m2", "2026-10-03", "com.myfitnesspal.android", 1350, 90, 100, 30),
+      food("f2", "2026-10-03", "com.fitbit.FitbitMobile", 1800, 30, 200, 80),
+      food("band", "2026-10-04", "com.band", 1700, 25, 90, 50),
+      food("phone", "2026-10-04", "com.phone", 1600, 90, 110, 60),
+    ];
+    const result = mapRecords({ Nutrition: records }, TZ);
+    const totals = (day: string) => Object.fromEntries(result.dailyValues.filter((r) => r.day === day).map((r) => [r.key, r.value]));
+    expect(totals("2026-10-02")).toEqual({ calories_in: 700, protein: 26, carbs: 83, fat: 11 });
+    expect(totals("2026-10-03")).toEqual({ calories_in: 1350, protein: 90, carbs: 100, fat: 30 });
+    expect(totals("2026-10-04")).toEqual({ calories_in: 1700, protein: 25, carbs: 90, fat: 50 });
+    expect(result.externalEntries.map((r) => r.id).sort()).toEqual(["hc-food-band", "hc-food-li1", "hc-food-li2", "hc-food-m2"]);
+    expect(mapRecords({ Nutrition: records.toReversed() }, TZ).dailyValues).toEqual(result.dailyValues);
+  });
+
+  it("retains macro-only coverage gaps even when their one-minute day share would round to zero", () => {
+    const good = { ...input.Nutrition[0], metadata: meta("good", "com.fitnow.loseit") };
+    const partial = {
+      ...good, metadata: meta("partial", "com.fitnow.loseit"), energy: energy(0), protein: mass(60), totalFat: mass(0),
+      startTime: at("2026-10-02", "23:59:00"), endTime: at("2026-10-03", "23:59:00"),
+    };
+    const mapped = mapRecords({ Nutrition: [good, partial] }, TZ);
+    expect(mapped.dailyValues.filter((r) => r.key === "nutrition_missing_energy")).toEqual([
+      { day: "2026-10-02", key: "nutrition_missing_energy", value: 1 },
+      { day: "2026-10-03", key: "nutrition_missing_energy", value: 1 },
+    ]);
+    expect(mapped.dailyValues.filter((r) => r.key === "calories_in")).toEqual([{ day: "2026-10-02", key: "calories_in", value: 600 }]);
+    expect(mapped.dailyValues).toContainEqual({ day: "2026-10-03", key: "protein", value: 60 });
+    expect(mapped.externalEntries.map((r) => r.id)).toEqual(["hc-food-good"]);
+    // Missing Lose It! calories must not be silently replaced by another origin's apparently complete total.
+    const mirror = { ...good, metadata: meta("mirror", "com.fitbit.FitbitMobile") };
+    const macroOnly = mapRecords({ Nutrition: [{ ...partial, startTime: good.startTime, endTime: good.endTime }, mirror] }, TZ);
+    expect(macroOnly.dailyValues).toEqual([
+      { day: "2026-10-02", key: "nutrition_missing_energy", value: 1 },
+      { day: "2026-10-02", key: "protein", value: 60 },
+    ]);
+    expect(macroOnly.externalEntries).toEqual([]);
+  });
+
   it("turns water and food records into read-only log entries with Health Connect's ids", () => {
     const entries = mapExternalEntries(input, TZ);
     expect(entries.every((e) => e.source === "health_connect" && e.createdAt === e.ts)).toBe(true);

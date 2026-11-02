@@ -81,7 +81,7 @@ export type DayRow = {
   training: TrainingRow | null;
   metrics: MetricsRow | null;
   /** Shown-only daily roll-ups (`_lib.ts` EXTRA_METRICS); a key is absent when that day has none. */
-  extra: Partial<Record<ExtraKey, number>>;
+  extra: Partial<Record<ExtraKey | "nutrition_missing_energy", number>>;
 };
 
 /**

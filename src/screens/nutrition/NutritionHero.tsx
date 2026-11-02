@@ -1,4 +1,4 @@
-// The Nutrition hero (spec §7.22): today's calories on the kit's ring, then protein, carbs and fat as three tiles on one
+// The Nutrition hero (spec §7.22): the selected day's calories on the kit's ring, then protein, carbs and fat as three tiles on one
 // card, each a small ring with the grams inside. Shaped like the Recovery hero: the dial bare on the page, a card under it.
 import { useWindowDimensions, View } from "react-native";
 import { useTranslation } from "react-i18next";
@@ -45,26 +45,28 @@ function MacroRing({ share, color, children }: { share: number | null; color: Da
   );
 }
 
-/** Today: calories against the target on a ring, then the three macros on a card. */
+/** The selected day's calories against the current target, then the three macros on a card. */
 export function Today({ vm }: { vm: NutritionVM }) {
   const { t: tr } = useTranslation("nutrition");
+  const { t: e } = useTranslation("energy");
   const { totals: t, targets } = vm;
   const kcal = targets.kcal.value;
-  const left = t.kcal === null ? kcal : kcal - t.kcal;
+  const left = t.kcal === null ? null : kcal - t.kcal;
+  const referenceOnly = !targets.kcal.custom && vm.energy.tdee.value === null;
   // The hero slot centres and shrinks its content, so the card takes the page's width (16 px gutters) itself.
   const { width } = useWindowDimensions();
   return (
     <View className="items-center gap-6">
       <View className="items-center gap-3">
-        <View accessible accessibilityLabel={tr("today.a11y", { eaten: show(t.kcal, grouped), target: grouped(kcal) })}>
+        <View accessible accessibilityLabel={e("dayA11y", { day: vm.day, eaten: show(t.kcal, grouped), target: grouped(kcal) })}>
           <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-            <ScoreDial variant="stat" size="lg" value={t.kcal} reason={t.kcal === null ? "no_data" : null} max={kcal} format="grouped" label={tr("unit.kcal")} color={left < 0 ? "warning" : "energy-active"} />
+            <ScoreDial variant="stat" size="lg" value={t.kcal} reason={t.kcal === null ? "no_data" : null} max={kcal} format="grouped" label={tr("unit.kcal")} color={left !== null && left < 0 ? "warning" : "energy-active"} />
           </View>
         </View>
         <View className="items-center gap-1">
-          <Text className={LABEL}>{t.kcal === null ? tr("today.nothing") : tr("today.soFar")}</Text>
-          <Text className="text-sm font-medium leading-5 text-muted-foreground">{tr("today.ofTarget", { target: grouped(kcal) })}</Text>
-          <Text className={cn(CAPTION, "text-center")}>{left > 0 ? tr("today.left", { kcal: grouped(left) }) : left < 0 ? tr("today.over", { kcal: grouped(-left) }) : tr("today.reached")}</Text>
+          <Text className={LABEL}>{t.kcal === null ? e("caloriesUnknown") : e(vm.day === vm.today ? "today" : "pastDay")}</Text>
+          <Text className="text-sm font-medium leading-5 text-muted-foreground">{e("currentTarget", { target: grouped(kcal) })}</Text>
+          {referenceOnly ? <Text className={cn(CAPTION, "text-center")}>{e("referenceOnly")}</Text> : left !== null && <Text className={cn(CAPTION, "text-center")}>{left > 0 ? tr("today.left", { kcal: grouped(left) }) : left < 0 ? tr("today.over", { kcal: grouped(-left) }) : tr("today.reached")}</Text>}
         </View>
       </View>
       <Card style={{ width: width - 32 }}>

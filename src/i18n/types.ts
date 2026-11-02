@@ -10,6 +10,7 @@ import type health from "./locales/en/health.json";
 import type journal from "./locales/en/journal.json";
 import type trends from "./locales/en/trends.json";
 import type nutrition from "./locales/en/nutrition.json";
+import type energy from "./locales/en/energy.json";
 import type goals from "./locales/en/goals.json";
 import type reports from "./locales/en/reports.json";
 import type coach from "./locales/en/coach.json";
@@ -25,7 +26,7 @@ import type coachTools from "./locales/en/coachTools.json";
 declare module "i18next" {
   interface CustomTypeOptions {
     defaultNS: "common";
-    resources: { common: typeof common, reasons: typeof reasons, metrics: typeof metrics, home: typeof home, sleep: typeof sleep, recovery: typeof recovery, strain: typeof strain, health: typeof health, journal: typeof journal, trends: typeof trends, nutrition: typeof nutrition, goals: typeof goals, reports: typeof reports, coach: typeof coach, settings: typeof settings, onboarding: typeof onboarding, more: typeof more, howItWorks: typeof howItWorks, notifications: typeof notifications, errors: typeof errors, ui: typeof ui; coachTools: typeof coachTools };
+    resources: { common: typeof common, reasons: typeof reasons, metrics: typeof metrics, home: typeof home, sleep: typeof sleep, recovery: typeof recovery, strain: typeof strain, health: typeof health, journal: typeof journal, trends: typeof trends, nutrition: typeof nutrition, energy: typeof energy, goals: typeof goals, reports: typeof reports, coach: typeof coach, settings: typeof settings, onboarding: typeof onboarding, more: typeof more, howItWorks: typeof howItWorks, notifications: typeof notifications, errors: typeof errors, ui: typeof ui; coachTools: typeof coachTools };
     returnNull: false;
   }
 }

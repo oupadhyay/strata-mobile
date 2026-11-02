@@ -66,6 +66,8 @@ export type TrendChartProps = {
    * pixels at the top of tall bars. Amounts and fixed-scale scores keep bars at W and M.
    */
   level?: boolean;
+  /** Intermittent measurements: trim unmeasured ends, connect observed points without an area fill, and snap to readings. */
+  sparse?: boolean;
 };
 
 // Resolved when read (ui namespace): a range's key suffix, then its spoken name, prior-period text, word and short label.
@@ -112,12 +114,15 @@ function Trend({ points, p }: { points: TrendPoint[]; p: TrendChartProps }) {
   const [x, setX] = useState<number | null>(null);
 
   const n = RANGE_DAYS[range];
-  const rows = points.slice(-n).map((pt, i) => ({
+  const window = points.slice(-n);
+  const start = p.sparse ? Math.max(0, window.findIndex((pt) => pt.value !== null)) : 0;
+  const end = p.sparse ? window.findLastIndex((pt) => pt.value !== null) + 1 : window.length;
+  const rows = window.slice(start, end).map((pt, i) => ({
     ...pt,
     fill: pt.value === null ? undefined : css(colorFor(p.colorBy, pt.value)),
     fillOpacity: pt.provisional ? 0.45 : 1,
     text: pt.value === null ? "" : formatValue(p.format, pt.value),
-    smooth: p.smooth ? trailingMean(points, points.length - Math.min(n, points.length) + i, p.smooth) : null,
+    smooth: p.smooth ? trailingMean(points, points.length - Math.min(n, points.length) + start + i, p.smooth) : null,
   }));
   const values = rows.map((r) => r.value).filter((v): v is number => v !== null);
   const avg = values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
@@ -149,7 +154,7 @@ function Trend({ points, p }: { points: TrendPoint[]; p: TrendChartProps }) {
         average: spoken(formatValue(p.format, avg), p.unit),
         low: formatValue(p.format, Math.min(...values)),
         high: formatValue(p.format, Math.max(...values)),
-        missing: rows.length - values.length ? t("trend.missingDays", { count: rows.length - values.length }) : "",
+        missing: window.length - values.length ? t("trend.missingDays", { count: window.length - values.length }) : "",
         split: p.stack ? t("trend.split", { parts: p.stack.map((s) => `${s.label} ${formatValue(p.format, partAvg(s.key))}`).join(", ") }) : "",
       })
     : t("trend.noData", { label: p.label, range: rangeWord(range) });
@@ -175,7 +180,9 @@ function Trend({ points, p }: { points: TrendPoint[]; p: TrendChartProps }) {
             const xs = line ? rows.map((_, i) => (rows.length === 1 ? (x0 + x1) / 2 : x0 + (i * (x1 - x0)) / (rows.length - 1))) : band.centers;
             const bw = barWidth(band.step, 0.1, MAX_BAR);
             const candidates =
-              range === "w"
+              p.sparse
+                ? rows.flatMap((r, i) => (r.value === null ? [] : [i]))
+                : range === "w"
                 ? rows.map((_, i) => i)
                 : range === "m"
                   ? rows.flatMap((_, i) => ((rows.length - 1 - i) % 7 === 0 ? [i] : []))
@@ -188,8 +195,10 @@ function Trend({ points, p }: { points: TrendPoint[]; p: TrendChartProps }) {
                 : preserveStartEnd(candidates.map((i) => ({ x: xs[i], size: tickTextWidth(rows[i].date) })), 0, width, 8).map((k) => ({ index: candidates[k.index], x: k.x }));
             const tickFormat = (d: string) => formatDay(d, range === "w" ? { weekday: "narrow" } : range === "m" ? DAY.monthDay : { month: "short" });
 
-            const lineDraw = line ? linePath(rows.map((r, i) => ({ x: xs[i], y: r.value === null ? null : y(r.value) })), level ? "linear" : "monotone") : "";
-            const areaDraw = line ? areaPath(rows.map((r, i) => ({ x: xs[i], y: r.value === null ? null : y(r.value) })), y1, level ? "linear" : "monotone") : "";
+            const pathPoints = rows.map((r, i) => ({ x: xs[i], y: r.value === null ? null : y(r.value) }));
+            // Keep calendar spacing and null readings intact; only the connecting stroke skips missing measurements.
+            const lineDraw = line ? linePath(p.sparse ? pathPoints.filter((pt) => pt.y !== null) : pathPoints, level ? "linear" : "monotone") : "";
+            const areaDraw = line && !p.sparse ? areaPath(pathPoints, y1, level ? "linear" : "monotone") : "";
             const lineColor = bands ? bandPaint(hi, lo, bands, y, css) : { color: c["foreground-secondary"] };
             const smoothDraw = p.smooth ? linePath(rows.flatMap((r, i) => (r.smooth === null ? [] : [{ x: xs[i], y: y(r.smooth) }])), "monotone") : "";
             const avgColor = css(colorFor(p.colorBy, avg ?? 0));
@@ -199,7 +208,9 @@ function Trend({ points, p }: { points: TrendPoint[]; p: TrendChartProps }) {
   };
   const [width, setWidth] = useState(0);
   const g = width > 0 ? geometry(width, HEIGHT) : null;
-  const ai = g && x !== null ? nearestIndex(g.xs, x) : -1;
+  const selectable = rows.flatMap((r, i) => (p.sparse && r.value === null ? [] : [i]));
+  const nearest = g && x !== null ? nearestIndex(selectable.map((i) => g.xs[i]), x) : -1;
+  const ai = nearest >= 0 ? selectable[nearest] : -1;
   const aRow = ai >= 0 ? rows[ai] : null;
   const scrubbed = aRow;
   const shown = scrubbed ?? (byDay || p.stack ? (rows.at(-1) ?? null) : null);

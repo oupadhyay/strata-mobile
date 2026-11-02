@@ -3,6 +3,7 @@
 // All timestamps are unix seconds. `day` is a local civil date "YYYY-MM-DD".
 
 import type { DisplayPrefs } from "@/lib/units";
+import type { WeightPlan } from "@/core/algorithms/expenditure";
 
 export type Sex = "male" | "female";
 
@@ -28,6 +29,8 @@ export type Profile = {
   sleepGoal?: { hours: number; method: "manual" | "automatic" } | null;
   /** Units and the clock (Settings › App). Absent: the phone's own (src/lib/units.ts deviceDisplayPrefs). */
   display?: DisplayPrefs | null;
+  /** Local nutrition review and the original weight-plan snapshot; neither changes imported Health Connect data. */
+  nutrition?: { excludedDays: string[]; plan: WeightPlan | null };
 };
 
 /** One sleep session; `day` is the local wake day. */

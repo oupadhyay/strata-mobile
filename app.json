@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Pulse",
-    "slug": "pulse",
+    "name": "Strata Test",
+    "slug": "strata-mobile",
     "platforms": [
       "android"
     ],
@@ -17,7 +17,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": true,
-      "package": "in.portlabs.pulse",
+      "package": "io.github.oupadhyay.strata",
       "permissions": [
         "android.permission.health.READ_STEPS",
         "android.permission.health.READ_DISTANCE",
@@ -115,11 +115,7 @@
       "reactCompiler": true
     },
     "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "8901b7ae-3c84-4057-9ef2-613ec7c4343e"
-      }
-    },
-    "owner": "adityajindals-team"
+      "router": {}
+    }
   }
 }
