@@ -2,12 +2,13 @@
 import { useState } from "react";
 import { View } from "react-native";
 import { useTranslation } from "react-i18next";
-import { formatDay, FORMATS, unitLabel } from "@/lib/format";
+import { DAY, formatDay, FORMATS, unitLabel } from "@/lib/format";
+import { addDays } from "@/lib/time";
+import { RANGES } from "@/lib/url";
 import { zoneOf } from "@/nutrition/balance";
-import { parseTarget, TARGET_KEYS, TARGET_LIMITS } from "@/nutrition/targets";
-import { getNutrition, type Averages, type NutritionVM } from "@/queries/nutrition";
+import { getNutrition, type NutritionVM } from "@/queries/nutrition";
 import { ErrorView } from "@/screens/health/ErrorView";
-import { Field, SwitchRow, TextField } from "@/screens/settings/controls";
+import { SwitchRow } from "@/screens/settings/controls";
 import { useScreen } from "@/screens/useScreen";
 import { setNutrition, useApp } from "@/state/app";
 import { useNutritionTargets } from "@/state/nutrition";
@@ -33,23 +34,66 @@ const grams = (v: number) => FORMATS.int(v);
 const show = (v: number | null, f: (x: number) => string) => (v === null ? "--" : f(v));
 const metric = (value: number | null) => ({ value, reason: value === null ? "no_data" as const : null, provisional: false });
 
-/** One period's daily averages, in the existing overview's two flat tiles. */
-function AverageTile({ title, a }: { title: string; a: Averages }) {
-  const { t: tr } = useTranslation("nutrition");
-  const macros = [tr("numbers.protein", { value: show(a.protein, grams) }), tr("numbers.carbs", { value: show(a.carbs, grams) }), tr("numbers.fat", { value: show(a.fat, grams) })].join(" · ");
-  const days = tr("averages.days", { days: a.days, span: a.span });
+/** Three compact rows share a 0–150% scale; the goal tick stays aligned and coverage stays separate. */
+function MacroAverages({ vm }: { vm: NutritionVM }) {
+  const { t } = useTranslation("nutrition");
+  const { t: e } = useTranslation("energy");
+  const [period, setPeriod] = useState<"7" | "30">("7");
+  const a = period === "7" ? vm.week : vm.month;
+  const from = addDays(vm.day, -a.span);
+  const to = addDays(vm.day, -1);
+  const scale = 1.5;
   return (
-    <View accessible accessibilityLabel={`${title}: ${a.days === 0 ? tr("averages.none") : `${tr("numbers.kcal", { value: show(a.kcal, grouped) })}, ${macros}, ${days}`}`} className="min-w-0 flex-1 gap-2 rounded-xl bg-inset p-3">
-      <Text className="text-[10px] font-bold uppercase leading-3 tracking-[0.1em] text-foreground-secondary">{title}</Text>
-      {a.days === 0 ? <Text className={CAPTION}>{tr("averages.none")}</Text> : (
-        <>
-          <Text className="font-numeric text-[30px] font-bold leading-9 tracking-[-0.01em] tabular-nums">
-            {show(a.kcal, grouped)}<Text className="text-sm font-medium leading-5">{` ${tr("unit.kcal")}`}</Text>
-          </Text>
-          <Text className={cn(CAPTION, "tabular-nums")}>{macros}</Text>
-          <Text className={cn(CAPTION, "tabular-nums")}>{days}</Text>
-        </>
-      )}
+    <View className="gap-2">
+      <View className="flex-row items-center justify-between gap-2">
+        <Text className={cn(CAPTION, "shrink")}>{e("macroComparison")}</Text>
+        <Segmented label={e("macroPeriod")} value={period} onChange={setPeriod} options={[
+          { value: "7", label: e("range7"), accessibilityLabel: t("averages.last7") },
+          { value: "30", label: e("range30"), accessibilityLabel: t("averages.last30") },
+        ]} />
+      </View>
+      <View className="gap-2">
+        {(["protein", "carbs", "fat"] as const).map((key) => {
+          const value = a[key];
+          const target = vm.targets[key].value;
+          const ratio = value !== null && target > 0 ? value / target : null;
+          const label = t(`target.${key}`);
+          return (
+            <View key={key} accessible accessibilityRole="image" accessibilityLabel={e(value === null ? "macroMissingA11y" : "macroAverageA11y", { label, value: show(value, grams), target: grams(target) })}>
+              <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" className="gap-1">
+                <View className="flex-row items-baseline justify-between gap-2">
+                  <Text className={cn(CAPTION, "text-foreground-secondary")}>{label}</Text>
+                  <Text className={cn(CAPTION, "tabular-nums")}><Text className="font-bold text-foreground">{show(value, grams)}</Text>{t("today.macroOf", { target: grams(target) })}</Text>
+                </View>
+                <View className={cn("relative h-1.5 rounded-xs", value === null ? "border-y border-dashed border-border" : "bg-foreground/10")}>
+                  {ratio !== null && <>
+                    <View className="h-full rounded-xs bg-energy-active" style={{ width: `${Math.max(0, Math.min(1, ratio / scale)) * 100}%` }} />
+                    <View className="absolute -top-0.5 h-2.5 w-px bg-foreground" style={{ left: `${100 / scale}%` }} />
+                    {ratio > scale && <View className="absolute right-0 top-0 size-1.5 rotate-45 border-r-2 border-t-2 border-energy-active" />}
+                  </>}
+                </View>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+      <View accessible accessibilityLabel={e("logCoverageA11y", { days: a.days, span: a.span, from: formatDay(from, DAY.short), to: formatDay(to, DAY.short) })} className="gap-1 border-t border-border pt-2">
+        <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" className="gap-1">
+          <View className="flex-row items-baseline justify-between gap-2">
+            <Text className={CAPTION}>{e("logCoverage")}</Text>
+            <Text className={cn(CAPTION, "font-numeric font-bold tabular-nums text-foreground-secondary")}>{FORMATS.pct(a.days / a.span * 100)}</Text>
+          </View>
+          <View className="flex-row gap-1">
+            {a.coverage.map((known, i) => <View key={i} className={cn("h-1.5 min-w-0 flex-1 rounded-xs border border-muted-foreground", known && "bg-foreground-secondary border-foreground-secondary")} />)}
+          </View>
+          <View className="flex-row gap-1">
+            {a.span === 7 ? a.coverage.map((_, i) => <Text key={i} className="min-w-0 flex-1 text-center text-[10px] leading-3 text-muted-foreground">{formatDay(addDays(from, i), { weekday: "narrow" })}</Text>) : <>
+              <Text className="flex-1 text-[10px] leading-3 text-muted-foreground">{formatDay(from, DAY.monthDay)}</Text>
+              <Text className="text-[10px] leading-3 text-muted-foreground">{formatDay(to, DAY.monthDay)}</Text>
+            </>}
+          </View>
+        </View>
+      </View>
     </View>
   );
 }
@@ -65,35 +109,7 @@ function History({ vm }: { vm: NutritionVM }) {
     <View className="gap-3">
       <Segmented label={t("history.chart")} fill value={key} onChange={setKey} options={[{ value: "kcal", label: t("history.calories") }, { value: "protein", label: t("history.protein") }]} />
       {data.some((d) => d.value !== null) ? <ColumnChart summary={key === "protein" ? t("history.summaryProtein") : t("history.summaryCalories")} data={data} format={key === "protein" ? "int" : "grouped"} unit={unit} tickEvery={7} yAxis reference={{ y: target, label: `${show(target, key === "protein" ? grams : grouped)} ${unitLabel(unit)}` }} /> : <EmptyState body={t("history.empty")} />}
-      <Text className={CAPTION}>{e("historyNote")}</Text>
-    </View>
-  );
-}
-
-function CalorieTarget({ placeholder }: { placeholder: number }) {
-  const { t } = useTranslation("energy");
-  const { custom, save } = useNutritionTargets();
-  const [text, setText] = useState(custom.kcal === null ? "" : String(custom.kcal));
-  const [pending, setPending] = useState(false);
-  const parsed = parseTarget("kcal", text);
-  const submit = async () => {
-    if (pending || parsed.error) return;
-    setPending(true);
-    try {
-      await save({ ...custom, kcal: parsed.value });
-      toast.success(t("saved"));
-    } catch {
-      toast.error(t("saveFailed"));
-    } finally {
-      setPending(false);
-    }
-  };
-  return (
-    <View className="gap-3 pt-3">
-      <Field label={t("calorieTarget")} hint={t("targetHint")} error={parsed.error ?? undefined}>
-        <TextField variant="input" accessibilityLabel={t("calorieTarget")} keyboardType="number-pad" value={text} onChangeText={setText} placeholder={String(placeholder)} editable={!pending} onSubmitEditing={() => void submit()} invalid={!!parsed.error} />
-      </Field>
-      <Button variant="outline" disabled={pending || !!parsed.error} onPress={() => void submit()}>{t(pending ? "saving" : "saveTarget")}</Button>
+      <Text className={CAPTION}>{e("historyLegend")}</Text>
     </View>
   );
 }
@@ -123,7 +139,6 @@ export function NutritionScreen() {
     }
   };
   const data = energy.balanceDays.map((d) => ({ label: formatDay(d.day, { weekday: "short" }), kcalIn: d.kcalIn, kcalOut: d.kcalOut, zone: d.kcalIn === null ? null : zoneOf(d.kcalIn, vm.targets.kcal.value) }));
-  const estimateNote = energy.state === "calibrating" ? e("calibrating") : e(energy.state, { day: energy.estimatedOn });
 
   return (
     <DetailShell
@@ -132,41 +147,36 @@ export function NutritionScreen() {
       info={{ title: t("info.title"), body: e("info") }}
       hero={<Today vm={vm} />}
       primary={
-        <SectionShell variant="card" title={e("balance")} info={{ title: e("balance"), body: [e("assumption"), e("chartNote")].join("\n\n") }}>
-          <Text className={CAPTION}>{e("source")}</Text>
-          <KeyStatRow variant="row" label={e("tdee")} metric={energy.tdee} unit="kcal" format="grouped" direction="none" />
-          <Text className={CAPTION}>{estimateNote}</Text>
-          <KeyStatRow variant="row" label={e(energy.deficit !== null && energy.deficit < 0 ? "surplus" : "deficit")} metric={{ ...metric(energy.deficit === null ? null : Math.abs(energy.deficit)), provisional: energy.deficit !== null }} unit="kcal" format="grouped" direction="none" />
-          {vm.day === vm.today && <Text className={CAPTION}>{e("dayNotFinished")}</Text>}
-          {energy.missingEnergy && <Text className={CAPTION}>{e("missingEnergy")}</Text>}
-          <SwitchRow label={e("partial")} hint={e("partialHint")} value={energy.excluded} disabled={pending} onChange={(on) => void persist({ ...prefs, excludedDays: on ? [...prefs.excludedDays, vm.day] : prefs.excludedDays.filter((d) => d !== vm.day) })} />
+        <SectionShell variant="card" title={e("balance")} action={{ label: e("targets"), href: `/nutrition-targets?d=${vm.day}` }} info={{ title: e("balance"), body: [e("calibrationNote"), e("assumption"), e("chartNote"), e("dayNotFinished"), e("partialHint")].join("\n\n") }}>
+          {energy.state === "calibrating" ? <Text className="text-xl font-semibold leading-7">{e("calibrating")}</Text> : (
+            <>
+              <KeyStatRow variant="row" label={e("tdee")} metric={energy.tdee} unit="kcal" format="grouped" direction="none" />
+              <Text className={CAPTION}>{e(energy.state, { day: energy.estimatedOn })}</Text>
+              {energy.deficit !== null && <KeyStatRow variant="row" label={e(energy.deficit < 0 ? "surplus" : "deficit")} metric={{ ...metric(Math.abs(energy.deficit)), provisional: true }} unit="kcal" format="grouped" direction="none" />}
+            </>
+          )}
           <View className="gap-3 pt-4">
             <CalorieBalanceChart summary={e("chart")} data={data} goal={vm.targets.kcal.value} goalLabel={t("history.target")} />
-            <Text className={CAPTION}>{e("chartKey")}</Text>
+            <Text className={CAPTION}>{e(data.some((d) => d.kcalOut !== null) ? "chartKey" : "intakeKey")}</Text>
           </View>
+          {energy.missingEnergy && <Text className={CAPTION}>{e("missingEnergy")}</Text>}
+          <SwitchRow rule label={e("partial")} value={energy.excluded} disabled={pending} onChange={(on) => void persist({ ...prefs, excludedDays: on ? [...prefs.excludedDays, vm.day] : prefs.excludedDays.filter((d) => d !== vm.day) })} />
         </SectionShell>
       }
       secondary={[
-        <SectionShell key="weight" variant="card" title={e("weight")} info={{ title: e("weight"), body: e("weightNote") }}>
-          <KeyStatRow variant="row" label={e("trend")} caption={energy.weightDay ? e("weightDate", { day: energy.weightDay }) : undefined} metric={energy.weight} unit={energy.weightUnit} format="decimal1" direction="none" href={`/metric/weight?d=${vm.day}`} />
-          <TrendChart label={e("weight")} data={{ value: energy.weightHistory, reason: null, provisional: false }} format="decimal1" unit={energy.weightUnit} colorBy="single" level sparse fixedRange="m" headline="day" />
-          <Text className={CAPTION}>{e("weightHistoryNote")}</Text>
+        <SectionShell key="weight" variant="card" title={e("weight")} action={{ label: e("weighIns"), href: `/metric/weight?d=${vm.day}` }} info={{ title: e("weight"), body: [e("weightNote"), e("weightHistoryNote"), energy.planStart ? e("planNote", { day: energy.planStart }) : e("planRequirements")].join("\n\n") }}>
+          <TrendChart label={e("weight")} data={{ value: energy.weightHistory, reason: null, provisional: false }} format="decimal1" unit={energy.weightUnit} colorBy="single" level sparse ranges={RANGES} headline="day" />
           {energy.expectedWeight !== null ? (
             <>
               <KeyStatRow variant="row" label={e("originalPlan")} metric={metric(energy.expectedWeight)} unit={energy.weightUnit} format="decimal1" direction="none" />
               <KeyStatRow variant="row" label={e("planGap")} metric={metric(energy.planGap)} unit={energy.weightUnit} format="decimal1" direction="none" />
-              <Text className={CAPTION}>{e("planNote", { day: energy.planStart })}</Text>
             </>
           ) : !energy.planStart && (
             <View className="gap-3 pt-3">
-              <Text className={CAPTION}>{e("planNeeds")}</Text>
+              {!energy.planCandidate && <Text className={CAPTION}>{e("planNeeds")}</Text>}
               <Button variant="outline" disabled={pending || !energy.planCandidate} onPress={() => energy.planCandidate && void persist({ ...prefs, plan: energy.planCandidate })}>{e("startPlan")}</Button>
             </View>
           )}
-        </SectionShell>,
-        <SectionShell key="targets" variant="card" title={t("screen.targets")} info={false}>
-          {TARGET_KEYS.map((k) => <KeyStatRow key={k} variant="row" label={t(`target.${k}`)} caption={vm.targets[k].basis} metric={metric(vm.targets[k].value)} unit={TARGET_LIMITS[k].unit} format={k === "kcal" ? "grouped" : "int"} direction="none" />)}
-          <CalorieTarget key={custom.kcal} placeholder={vm.suggested.kcal.value} />
         </SectionShell>,
         <SectionShell key="activity" variant="card" title={e("activity")} info={{ title: e("activity"), body: [e("hrNote"), e("wearableNote")].join("\n\n") }}>
           <KeyStatRow variant="row" label={e("recordedMinutes")} metric={metric(energy.activity.recordedMinutes || null)} unit="min" format="int" direction="none" />
@@ -176,9 +186,13 @@ export function NutritionScreen() {
           <KeyStatRow variant="row" label={e("wearable")} metric={{ ...metric(energy.wearableKcal), provisional: vm.day === vm.today }} unit="kcal" format="grouped" direction="none" />
         </SectionShell>,
         <SectionShell key="averages" variant="card" title={t("averages.title")} info={{ title: t("averages.title"), body: e("averagesNote") }}>
-          <View className="flex-row gap-3"><AverageTile title={t("averages.last7")} a={vm.week} /><AverageTile title={t("averages.last30")} a={vm.month} /></View>
+          <View className="gap-3">
+            <Text className={CAPTION}>{e("rollingAverage")}</Text>
+            <TrendChart label={e("rollingAverage")} data={{ value: vm.rolling.map((a) => ({ date: a.date, value: a.kcal })), reason: null, provisional: false }} format="grouped" unit="kcal" colorBy="single" level fixedRange="m" headline="day" />
+            <MacroAverages vm={vm} />
+          </View>
         </SectionShell>,
-        <SectionShell key="history" variant="card" title={t("averages.last30")} info={false}><History vm={vm} /></SectionShell>,
+        <SectionShell key="history" variant="card" title={t("averages.last30")} info={{ title: t("averages.last30"), body: e("historyNote") }}><History vm={vm} /></SectionShell>,
       ]}
     />
   );

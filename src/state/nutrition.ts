@@ -1,6 +1,6 @@
 // The person's own nutrition targets (Nutrition › Targets), kept on the phone (AsyncStorage "pulse.nutrition.targets"):
-// a number per target they set, null where Pulse's suggestion applies (src/nutrition/targets.ts). One module-level
-// store like the goals (src/state/goals.ts), so every screen sees a save at once.
+// a number per gram target or a percentage split, null where Pulse's suggestion applies (src/nutrition/targets.ts).
+// One module-level store like the goals (src/state/goals.ts), so every screen sees a save at once.
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as React from "react";
 import { NO_CUSTOM, parseCustomTargets, TARGET_KEYS, type CustomTargets } from "@/nutrition/targets";
@@ -30,7 +30,7 @@ const snapshot = () => saved;
 /** Saves the targets; none set is stored as nothing. */
 export async function saveNutritionTargets(next: CustomTargets): Promise<void> {
   await loaded;
-  if (TARGET_KEYS.every((k) => next[k] === null)) await AsyncStorage.removeItem(NUTRITION_TARGETS_KEY);
+  if (!next.split && TARGET_KEYS.every((k) => next[k] === null)) await AsyncStorage.removeItem(NUTRITION_TARGETS_KEY);
   else await AsyncStorage.setItem(NUTRITION_TARGETS_KEY, JSON.stringify(next));
   saved = next;
   emit();

@@ -143,6 +143,62 @@ describe("intake and weight energy balance", () => {
     expect((await store.getProfile())?.nutrition?.plan).toEqual(plan);
   });
 
+  it("exposes older weigh-ins in profile units without inventing measurements between them", async () => {
+    const first = addDays(TODAY, -209);
+    const middle = addDays(TODAY, -80);
+    const recent = addDays(TODAY, -2);
+    await store.upsertMetrics([
+      { ...emptyMetrics(first), weightKg: 88.6 },
+      { ...emptyMetrics(middle), weightKg: 84.3 },
+      { ...emptyMetrics(recent), weightKg: 82.9 },
+      { ...emptyMetrics(addDays(TODAY, 1)), weightKg: 40.8 },
+    ]);
+    const vm = await getNutrition(ctx, NO_CUSTOM);
+    expect(vm.energy.weightHistory).toHaveLength(210);
+    expect(vm.energy.weightHistory[0]).toEqual({ date: first, value: 88.6 });
+    expect(vm.energy.weightHistory.find((p) => p.date === middle)?.value).toBe(84.3);
+    expect(vm.energy.weightHistory.at(-3)).toEqual({ date: recent, value: 82.9 });
+    expect(vm.energy.weightHistory.filter((p) => p.value !== null)).toHaveLength(3);
+    expect(vm.energy.weightHistory.at(-1)).toEqual({ date: TODAY, value: null });
+
+    ctx.profile = { ...PROFILE, display: { units: "imperial", hours: 12 } };
+    const lb = await getNutrition(ctx, NO_CUSTOM);
+    expect(lb.energy.weightUnit).toBe("lb");
+    expect(lb.energy.weightHistory[0].value).toBeCloseTo(195.32956429148, 8);
+    const past = await getNutrition(ctx, NO_CUSTOM, middle);
+    expect(past.energy.weightHistory.at(-1)).toMatchObject({ date: middle });
+    expect(past.energy.weightHistory.filter((p) => p.value !== null)).toHaveLength(2);
+  });
+
+  it("plots trailing seven-calendar-day averages before the selected date, excluding unknown logs but counting recorded zero", async () => {
+    const selected = addDays(TODAY, -2);
+    const at = (offset: number) => addDays(selected, offset);
+    const inputs = [
+      [-37, 9000, 450], [-36, 1100, 55], [-34, 2300, 115], [-33, 9999, 999],
+      [-32, 0, 0], [-31, 4000, 300], [-30, 1700, 85], [-29, 5200, 260],
+      [-8, 3500, 175], [-7, 1400, 70], [-6, 2600, 130], [-4, 9000, 450],
+      [-3, 4000, 200], [-2, 0, 0], [-1, 2000, 100], [0, 6500, 325], [1, 7000, 350],
+    ];
+    await store.upsertDailyValues([
+      ...inputs.flatMap(([offset, kcal, protein]) => [
+        { day: at(offset), key: "calories_in", value: kcal },
+        { day: at(offset), key: "protein", value: protein },
+      ]),
+      ...[-33, -4].map((offset) => ({ day: at(offset), key: "nutrition_missing_energy", value: 1 })),
+    ]);
+    ctx.profile = { ...PROFILE, nutrition: { excludedDays: [at(-31), at(-3)], plan: null } };
+    const vm = await getNutrition(ctx, NO_CUSTOM, selected);
+    expect(vm.rolling).toHaveLength(30);
+    expect(vm.rolling[0]).toEqual({ date: at(-30), kcal: 1275, protein: 63.8, carbs: null, fat: null, days: 4, span: 7, coverage: [true, false, true, false, true, false, true] });
+    expect(vm.rolling.at(-1)).toEqual({ date: at(-1), kcal: 1500, protein: 75, carbs: null, fat: null, days: 4, span: 7, coverage: [true, true, false, false, false, true, true] });
+    expect(vm.rolling.find((p) => p.date === at(-15))).toEqual({ date: at(-15), kcal: null, protein: null, carbs: null, fat: null, days: 0, span: 7, coverage: Array(7).fill(false) });
+    // The strip keeps calendar positions, including recorded zero, but excludes unknown and reviewed logs.
+    expect(vm.week).toMatchObject({ days: 4, span: 7, fat: null, coverage: [true, true, false, false, false, true, true] });
+    expect(vm.month).toMatchObject({ days: 7, span: 30, coverage: Array.from({ length: 30 }, (_, i) => [0, 1, 22, 23, 24, 28, 29].includes(i)) });
+    await eat(selected, 100);
+    expect((await getNutrition(ctx, NO_CUSTOM, selected)).rolling).toEqual(vm.rolling);
+  });
+
   it("offers an original plan only after calibration, with an explicit target and today's weigh-in", async () => {
     await seedEnergy();
     expect((await getNutrition(ctx, NO_CUSTOM)).energy.planCandidate).toBeNull();

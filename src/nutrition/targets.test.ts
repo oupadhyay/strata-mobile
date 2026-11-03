@@ -1,7 +1,7 @@
 // Protein uses stored kg regardless of display units; calorie suggestions use inferred maintenance, never wearable
 // burn. Until calibrated the food-label reference is explicit, and the person's chosen target always wins.
 import { describe, expect, it } from "vitest";
-import { calorieTarget, DEFAULT_KCAL, DEFAULT_PROTEIN_G, NO_CUSTOM, parseCustomTargets, parseTarget, progressOf, proteinTarget, resolveTargets, validateTarget } from "./targets";
+import { calorieTarget, DEFAULT_KCAL, DEFAULT_PROTEIN_G, NO_CUSTOM, parseCustomTargets, parseMacroSplit, parseTarget, progressOf, proteinTarget, resolveTargets, validateTarget } from "./targets";
 
 describe("protein target", () => {
   it("is 1.6 g per kg of the latest weight", () => {
@@ -81,5 +81,56 @@ describe("the person's own targets", () => {
     expect(parseCustomTargets(null)).toEqual(NO_CUSTOM);
     expect(parseCustomTargets("{broken")).toEqual(NO_CUSTOM);
     expect(parseCustomTargets(JSON.stringify({ protein: 140, kcal: 50, fat: "60", carbs: 210 }))).toEqual({ kcal: null, protein: 140, carbs: 210, fat: null });
+  });
+
+  it("keeps an explicit zero macro target distinct from a blank suggestion", () => {
+    expect(parseTarget("carbs", "0")).toEqual({ value: 0, error: null });
+    expect(parseTarget("carbs", "")).toEqual({ value: null, error: null });
+    const custom = parseCustomTargets(JSON.stringify({ kcal: 1800, protein: 150, carbs: 0, fat: 80 }));
+    expect(resolveTargets(custom, { weightKg: 72, heightCm: null, expenditureKcal: 2400 }).carbs).toEqual({ value: 0, custom: true, basis: "Your target" });
+    expect(validateTarget("fat", -1)).not.toBeNull();
+  });
+});
+
+describe("a custom macro split", () => {
+  it("uses each nutrient's calorie density and keeps the split as the calorie budget changes", () => {
+    const custom = parseCustomTargets(JSON.stringify({ ...NO_CUSTOM, kcal: 2110, split: { protein: 23.5, carbs: 41.5, fat: 35 } }));
+    const input = { weightKg: 72, heightCm: 178, expenditureKcal: 2674 };
+    const t = resolveTargets(custom, input);
+    // 495.85 / 4, 875.65 / 4 and 738.5 / 9 kcal per nutrient, rounded to whole grams.
+    expect([t.protein.value, t.carbs.value, t.fat.value]).toEqual([124, 219, 82]);
+    expect([t.protein.custom, t.carbs.custom, t.fat.custom]).toEqual([true, true, true]);
+    const changed = resolveTargets({ ...custom, kcal: 1800 }, { ...input, units: "imperial" });
+    expect([changed.protein.value, changed.carbs.value, changed.fat.value]).toEqual([106, 187, 70]);
+    const maintenance = resolveTargets({ ...custom, kcal: null }, input);
+    expect(maintenance.kcal.value).toBe(2650);
+    expect([maintenance.protein.value, maintenance.carbs.value, maintenance.fat.value]).toEqual([156, 275, 103]);
+  });
+
+  it("requires all percentages to be in range and total 100, with decimal points or commas", () => {
+    expect(parseMacroSplit({ protein: "23,5", carbs: "41.5", fat: "35" })).toEqual({ value: { protein: 23.5, carbs: 41.5, fat: 35 }, error: null });
+    expect(parseMacroSplit({ protein: "0", carbs: "100", fat: "0" })).toEqual({ value: { protein: 0, carbs: 100, fat: 0 }, error: null });
+    for (const text of [
+      { protein: "23.5", carbs: "41.5", fat: "34.9" },
+      { protein: "23.5", carbs: "41.5", fat: "35.1" },
+      { protein: "101", carbs: "0", fat: "-1" },
+      { protein: "", carbs: "65", fat: "35" },
+    ]) {
+      const parsed = parseMacroSplit(text);
+      expect(parsed.value, JSON.stringify(text)).toBeNull();
+      expect(parsed.error, JSON.stringify(text)).toBeTruthy();
+    }
+  });
+
+  it("round-trips percentages, replaces old gram overrides, and ignores a broken split", () => {
+    const grams = { kcal: 1800, protein: 140, carbs: 175, fat: 60 };
+    const split = { protein: 25, carbs: 45, fat: 30 };
+    expect(parseCustomTargets(JSON.stringify({ ...grams, split }))).toEqual({ ...NO_CUSTOM, kcal: 1800, split });
+    expect(parseCustomTargets(JSON.stringify({ ...grams, split: { protein: 101, carbs: 0, fat: -1 } }))).toEqual(grams);
+    expect(parseCustomTargets(JSON.stringify({ ...grams, split: { protein: "25", carbs: 45, fat: 30 } }))).toEqual(grams);
+    // A small accepted percentage is serialized in exponent notation; it must not disappear on reopening.
+    const precise = { protein: 0.0000001, carbs: 99.9999999, fat: 0 };
+    expect(parseMacroSplit({ protein: "0.0000001", carbs: "99.9999999", fat: "0" }).value).toEqual(precise);
+    expect(parseCustomTargets(JSON.stringify({ ...NO_CUSTOM, split: precise }))).toEqual({ ...NO_CUSTOM, split: precise });
   });
 });

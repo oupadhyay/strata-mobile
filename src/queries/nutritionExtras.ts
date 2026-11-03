@@ -42,7 +42,7 @@ export async function getNutritionEnergy(ctx: QueryCtx, rows: Map<string, DayRow
     planGap: expectedKg === null || current.trendKg.value === null || current.weightDay !== day ? null : q.change(current.trendKg.value - expectedKg),
     planCandidate,
     planStart: plan?.startDay ?? null,
-    weightHistory: history.slice(-30).map((h) => ({ date: h.day, value: rows.get(h.day)?.metrics?.weightKg == null || h.trendKg.value === null ? null : q.value(h.trendKg.value) })),
+    weightHistory: history.map((h) => ({ date: h.day, value: rows.get(h.day)?.metrics?.weightKg == null || h.trendKg.value === null ? null : q.value(h.trendKg.value) })),
     balanceDays: Array.from({ length: 7 }, (_, i) => {
       const d = addDays(day, i - 6);
       const estimate = byDay.get(d);

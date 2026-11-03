@@ -204,7 +204,7 @@ describe("Pulse's food in the day's totals", () => {
 describe("Nutrition overview", () => {
   it("averages the days with food logged before today", () => {
     const day = (kcal?: number, protein?: number) => ({ extra: { ...(kcal !== undefined && { calories_in: kcal }), ...(protein !== undefined && { protein }) } }) as never;
-    expect(averagesOf([day(2000, 80), day(), day(1600), undefined, day(1801, 100)], 5)).toEqual({ kcal: 1800, protein: 90, carbs: null, fat: null, days: 3, span: 5 });
+    expect(averagesOf([day(2000, 80), day(), day(1600), undefined, day(1801, 100)], 5)).toEqual({ kcal: 1800, protein: 90, carbs: null, fat: null, days: 3, span: 5, coverage: [true, false, true, false, true] });
   });
 
   it("puts today's totals against the targets, with the averages, the chart and today's food by meal", async () => {
@@ -230,7 +230,7 @@ describe("Nutrition overview", () => {
     expect(vm.targets.kcal).toMatchObject({ value: 2000, custom: false });
     expect(vm.targets.fat.value).toBe(67);
     expect(vm.targets.carbs.value).toBe(221);
-    expect(vm.week).toEqual({ kcal: 2000, protein: 100, carbs: 250, fat: 60, days: 7, span: 7 });
+    expect(vm.week).toEqual({ kcal: 2000, protein: 100, carbs: 250, fat: 60, days: 7, span: 7, coverage: Array(7).fill(true) });
     expect(vm.month).toMatchObject({ kcal: 2000, days: 7, span: 30 });
     expect(vm.history).toHaveLength(30);
     expect(vm.history.at(-1)).toEqual({ day: TODAY, kcal: 800, protein: 43, provisional: true });
@@ -246,6 +246,12 @@ describe("Nutrition overview", () => {
     const own = await getNutrition(ctx, { kcal: 2200, protein: 150, carbs: null, fat: null });
     expect(own.targets.protein).toEqual({ value: 150, custom: true, basis: "Your target" });
     expect(own.targets.carbs.value).toBe(Math.round((2200 - 150 * 4 - 73 * 9) / 4));
+
+    const split = await getNutrition(ctx, { ...NO_CUSTOM, kcal: 1800, split: { protein: 25, carbs: 45, fat: 30 } });
+    expect([split.targets.protein.value, split.targets.carbs.value, split.targets.fat.value]).toEqual([113, 203, 60]);
+    expect(split.balance.goal).toBe(1800);
+    expect(split.totals).toEqual(vm.totals);
+    expect(split.week).toEqual(vm.week);
   });
 
   it("shows what a Google account's totals hold beyond the listed entries", async () => {

@@ -126,6 +126,8 @@ function Screens({ onboarded }: { onboarded: boolean }) {
           <Stack.Screen name="more/data" />
           <Stack.Screen name="more/how-it-works" />
           <Stack.Screen name="more/how-it-works/[score]" />
+          <Stack.Screen name="nutrition" />
+          <Stack.Screen name="nutrition-targets" />
           <Stack.Screen name="recovery" />
           <Stack.Screen name="reports" />
           <Stack.Screen name="reports/[period]" />

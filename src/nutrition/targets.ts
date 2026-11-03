@@ -8,15 +8,19 @@
 //  - fat: 30 % of the calories (inside the 20-35 % the dietary guidelines give);
 //  - carbs: the calories left after protein and fat.
 // No React or database, so the tests run in node. The "basis" sentences and errors are translated here (nutrition, errors).
-import { localeFixed } from "@/lib/locale";
+import { getLocale, localeFixed } from "@/lib/locale";
 import { i18n } from "@/i18n/config";
 import { quantity, type UnitSystem } from "@/lib/units";
 
-export const TARGET_KEYS = ["kcal", "protein", "carbs", "fat"] as const;
+export const MACRO_KEYS = ["protein", "carbs", "fat"] as const;
+export type MacroKey = (typeof MACRO_KEYS)[number];
+export const TARGET_KEYS = ["kcal", ...MACRO_KEYS] as const;
 export type TargetKey = (typeof TARGET_KEYS)[number];
 
-/** The person's own targets; null follows Pulse's suggestion. */
-export type CustomTargets = Record<TargetKey, number | null>;
+/** Percentages of the calorie budget, not of gram totals. Kept as percentages so later calorie changes scale them. */
+export type MacroSplit = Record<MacroKey, number>;
+/** The person's own gram targets, or a percentage split; null without a split follows Pulse's suggestion. */
+export type CustomTargets = Record<TargetKey, number | null> & { split?: MacroSplit };
 export const NO_CUSTOM: CustomTargets = { kcal: null, protein: null, carbs: null, fat: null };
 
 export const PROTEIN_G_PER_KG = 1.6;
@@ -28,9 +32,9 @@ export const FAT_SHARE = 0.3;
 export type TargetLimit = { min: number; max: number; unit: string };
 export const TARGET_LIMITS: Record<TargetKey, TargetLimit> = {
   kcal: { min: 800, max: 8000, unit: "kcal" },
-  protein: { min: 10, max: 400, unit: "g" },
-  carbs: { min: 5, max: 1000, unit: "g" },
-  fat: { min: 5, max: 400, unit: "g" },
+  protein: { min: 0, max: 400, unit: "g" },
+  carbs: { min: 0, max: 1000, unit: "g" },
+  fat: { min: 0, max: 400, unit: "g" },
 };
 
 /** One resolved target: its value, whether it is the person's own, and where it comes from in a few words. */
@@ -64,13 +68,27 @@ export function calorieTarget(expenditureKcal: number | null): Target {
 
 /** Every target: the person's own where set, else the suggestions (fat and carbs follow the calories and protein). */
 export function resolveTargets(custom: CustomTargets, input: { weightKg: number | null; heightCm: number | null; expenditureKcal: number | null; units?: UnitSystem }): Targets {
-  const own = (k: TargetKey): Target | null => (custom[k] !== null ? { value: custom[k], custom: true, basis: i18n.t("nutrition:basis.own") } : null);
-  const kcal = own("kcal") ?? calorieTarget(input.expenditureKcal);
-  const protein = own("protein") ?? proteinTarget(input.weightKg, input.heightCm, input.units);
-  const fat = own("fat") ?? { value: Math.round((kcal.value * FAT_SHARE) / 9), custom: false, basis: i18n.t("nutrition:basis.fat", { pct: Math.round(FAT_SHARE * 100), kcal: group(kcal.value) }) };
-  const left = kcal.value - protein.value * 4 - fat.value * 9;
+  const kcal = custom.kcal !== null ? { value: custom.kcal, custom: true, basis: i18n.t("nutrition:basis.own") } : calorieTarget(input.expenditureKcal);
+  return { kcal, ...resolveMacros(custom, kcal.value, proteinTarget(input.weightKg, input.heightCm, input.units)) };
+}
+
+/** Resolve macros for a calorie budget; the editor and saved targets use the same suggestions. */
+export function resolveMacros(custom: CustomTargets, kcal: number, suggestedProtein: Target): Pick<Targets, MacroKey> {
+  const split = custom.split;
+  if (split) {
+    const target = (k: MacroKey): Target => ({
+      value: Math.round(kcal * split[k] / 100 / (k === "fat" ? 9 : 4)),
+      custom: true,
+      basis: i18n.t("nutrition:targets.percentBasis", { pct: split[k], kcal: group(kcal) }),
+    });
+    return { protein: target("protein"), carbs: target("carbs"), fat: target("fat") };
+  }
+  const own = (k: MacroKey): Target | null => (custom[k] !== null ? { value: custom[k], custom: true, basis: i18n.t("nutrition:basis.own") } : null);
+  const protein = own("protein") ?? suggestedProtein;
+  const fat = own("fat") ?? { value: Math.round((kcal * FAT_SHARE) / 9), custom: false, basis: i18n.t("nutrition:basis.fat", { pct: Math.round(FAT_SHARE * 100), kcal: group(kcal) }) };
+  const left = kcal - protein.value * 4 - fat.value * 9;
   const carbs = own("carbs") ?? { value: Math.max(0, Math.round(left / 4)), custom: false, basis: i18n.t("nutrition:basis.carbs") };
-  return { kcal, protein, carbs, fat };
+  return { protein, carbs, fat };
 }
 
 /** Progress toward a target, 0-1 (more than the target reads full); null without a value. */
@@ -95,6 +113,26 @@ export function parseTarget(key: TargetKey, text: string): { value: number | nul
   return { value: error ? null : n, error };
 }
 
+/** Percentages share one validation rule for stored numbers and typed fields. */
+export function validateMacroSplit(split: MacroSplit): string | null {
+  const total = split.protein + split.carbs + split.fat;
+  if (MACRO_KEYS.some((k) => !Number.isFinite(split[k]) || split[k] < 0 || split[k] > 100)) {
+    return i18n.t("nutrition:targets.splitError");
+  }
+  return Math.abs(total - 100) > 1e-6 ? i18n.t("nutrition:targets.splitTotalError", { total: new Intl.NumberFormat(getLocale(), { maximumFractionDigits: 6 }).format(total) }) : null;
+}
+
+/** All three percentages are required, each 0–100, totaling 100. Decimal commas and points are accepted. */
+export function parseMacroSplit(text: Record<MacroKey, string>): { value: MacroSplit | null; error: string | null } {
+  const read = (k: MacroKey) => {
+    const s = text[k].trim().replace(",", ".");
+    return /^\d+([.]\d+)?$/.test(s) ? Number(s) : NaN;
+  };
+  const split: MacroSplit = { protein: read("protein"), carbs: read("carbs"), fat: read("fat") };
+  const error = validateMacroSplit(split);
+  return { value: error ? null : split, error };
+}
+
 /** Stored JSON → custom targets; anything missing, broken or out of range follows the suggestion. */
 export function parseCustomTargets(raw: string | null): CustomTargets {
   let v: unknown = null;
@@ -108,6 +146,12 @@ export function parseCustomTargets(raw: string | null): CustomTargets {
   for (const k of TARGET_KEYS) {
     const t = o[k];
     if (typeof t === "number" && validateTarget(k, t) === null) out[k] = t;
+  }
+  if (o.split && typeof o.split === "object") {
+    const s = o.split as MacroSplit;
+    if (MACRO_KEYS.every((k) => typeof s[k] === "number") && validateMacroSplit(s) === null) {
+      return { kcal: out.kcal, protein: null, carbs: null, fat: null, split: { protein: s.protein, carbs: s.carbs, fat: s.fat } };
+    }
   }
   return out;
 }

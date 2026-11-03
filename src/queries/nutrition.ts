@@ -16,8 +16,8 @@ import { getNutritionEnergy, intakeOf } from "./nutritionExtras";
 export const MACROS = ["kcal", "protein", "carbs", "fat"] as const;
 export type Macro = (typeof MACROS)[number];
 
-/** Daily averages over the days that have each nutrient, and how many days had food logged out of `span`. */
-export type Averages = Record<Macro, number | null> & { days: number; span: number };
+/** Daily averages over each nutrient's known days; calorie-log coverage keeps calendar order, oldest first. */
+export type Averages = Record<Macro, number | null> & { days: number; span: number; coverage: boolean[] };
 
 export type FoodItem = {
   id: string;
@@ -78,6 +78,8 @@ export type NutritionVM = {
   /** The 7 and 30 days before the selected day; incomplete or reviewed partial days do not count. */
   week: Averages;
   month: Averages;
+  /** 30 trailing seven-calendar-day averages, ending before the selected day; only known, complete logs count. */
+  rolling: (Averages & { date: string })[];
   /** 30 days ending on the selected day, oldest first; today's running totals are provisional. */
   history: { day: string; kcal: number | null; protein: number | null; provisional?: true }[];
   /** Today's food by meal, in meal order. */
@@ -106,14 +108,14 @@ const FOOD_PICK: Record<Macro, (r: DayRow) => number | null | undefined> = {
 
 /** Each macro's mean over the rows that have it; `days` counts the rows with calories (food logged). */
 export function averagesOf(rows: (DayRow | undefined)[], span: number): Averages {
-  const out = { kcal: null, protein: null, carbs: null, fat: null, days: 0, span } as Averages;
+  const coverage = rows.map((r) => finite(r ? FOOD_PICK.kcal(r) : undefined));
+  const out: Averages = { kcal: null, protein: null, carbs: null, fat: null, days: coverage.filter(Boolean).length, span, coverage };
   for (const m of MACROS) {
     const xs = rows.flatMap((r) => {
       const v = r ? FOOD_PICK[m](r) : undefined;
       return finite(v) ? [v] : [];
     });
     if (xs.length) out[m] = roundNutrient(m, xs.reduce((a, b) => a + b, 0) / xs.length);
-    if (m === "kcal") out.days = xs.length;
   }
   return out;
 }
@@ -169,7 +171,8 @@ export async function getNutrition(ctx: QueryCtx, custom: CustomTargets, day = t
   const weights = (await metricsWithLoggedBody(ctx.store)).filter((r) => r.day <= day && finite(r.weightKg));
   const weightKg = weights.at(-1)?.weightKg ?? null;
   // A fixed start at the first weigh-in keeps the EWMA identical when browsing history or appending new days.
-  const from = weights[0]?.day < addDays(day, -30) ? weights[0].day : addDays(day, -30);
+  // Six extra days complete the earliest rolling-average window, even before the first weigh-in.
+  const from = weights[0]?.day < addDays(day, -36) ? weights[0].day : addDays(day, -36);
   const [rows, logged, synced] = await Promise.all([
     loadDays(ctx, from, day),
     ctx.store.loggedEntries(localMidnight(day, ctx.timeZone), 10_000),
@@ -177,8 +180,8 @@ export async function getNutrition(ctx: QueryCtx, custom: CustomTargets, day = t
   ]);
   const energy = await getNutritionEnergy(ctx, rows, day, custom.kcal);
   const excluded = new Set(ctx.profile.nutrition?.excludedDays ?? []);
-  const before = (n: number) => Array.from({ length: n }, (_, k) => {
-    const d = addDays(day, -n + k);
+  const before = (n: number, end = day) => Array.from({ length: n }, (_, k) => {
+    const d = addDays(end, -n + k);
     const r = rows.get(d);
     return excluded.has(d) || (r?.extra.nutrition_missing_energy ?? 0) > 0 ? undefined : r;
   });
@@ -225,6 +228,10 @@ export async function getNutrition(ctx: QueryCtx, custom: CustomTargets, day = t
     suggested: resolveTargets(NO_CUSTOM, basis),
     week: averagesOf(before(7), 7),
     month: averagesOf(before(30), 30),
+    rolling: Array.from({ length: 30 }, (_, k) => {
+      const date = addDays(day, k - 30);
+      return { date, ...averagesOf(before(7, addDays(date, 1)), 7) };
+    }),
     history: Array.from({ length: 30 }, (_, k) => {
       const d = addDays(day, k - 29);
       const r = rows.get(d);
