@@ -32,6 +32,7 @@ import {
   exercisesBetween,
 } from "./common";
 import { illnessRaised, VITAL_LABEL } from "./home";
+import { intakeOf } from "./nutritionExtras";
 import { zoneBounds, zoneNote, zoneRows } from "./strain";
 import type {
   ChipTone,
@@ -59,6 +60,7 @@ export async function getHealthHub(ctx: QueryCtx): Promise<HealthHubVM> {
   const today = todayOf(ctx);
   const rows = await loadDays(ctx, addDays(today, -35), today);
   const row = rows.get(today);
+  const kcal = intakeOf(row, ctx.profile.nutrition?.excludedDays.includes(today));
   const [hsVm, monitor, fit, stressSeries, heartRate] = await Promise.all([
     getHealthspan(today, ctx),
     getMonitor(today, ctx, rows),
@@ -96,6 +98,7 @@ export async function getHealthHub(ctx: QueryCtx): Promise<HealthHubVM> {
       ? ok({ vo2max: fit.vo2.value.value, category: fit.vo2.value.category, percentile: fit.vo2.value.percentile, acwr: tl?.acwr ?? null, acwrTone: tl?.tone ?? null })
       : none("no_data"),
     heartRate,
+    nutrition: kcal === null ? none("no_data") : ok(kcal, true),
   };
 }
 

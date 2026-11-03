@@ -359,6 +359,8 @@ export type HealthHubVM = {
   fitness: Metric<{ vo2max: number; category: string; percentile: number; acwr: number | null; acwrTone: ChipTone | null }>;
   /** The newest band reading (epoch ms), today or not. */
   heartRate: { t: number; bpm: number } | null;
+  /** Today's logged kcal; incomplete or excluded totals are unknown, never zero. */
+  nutrition: Metric<number>;
 };
 /** Alias: the task's name for the Health hub view model. */
 export type HealthVM = HealthHubVM;

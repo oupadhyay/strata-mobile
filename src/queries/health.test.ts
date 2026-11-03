@@ -6,7 +6,7 @@ import type { Profile } from "@/data/types";
 import { addDays } from "@/lib/time";
 import { runPipeline } from "@/pipeline";
 import type { QueryCtx } from "./ctx";
-import { getMonitor } from "./health";
+import { getHealthHub, getMonitor } from "./health";
 
 const TZ = "Asia/Kolkata";
 const TODAY = "2026-10-02";
@@ -39,5 +39,35 @@ describe("getMonitor", () => {
         expect(vm.count.value.outOfRange).toBe(vm.vitals.filter((v) => v.status === "high" || v.status === "low").length);
       }
     }
+  });
+});
+
+describe("getHealthHub", () => {
+  it("shows today's logged calories, preserves a recorded zero and withholds missing or incomplete totals", async () => {
+    const store = new MemoryStore();
+    const query = { ...ctx, store, profile: { ...PROFILE } };
+    await store.upsertDailyValues([
+      { day: addDays(TODAY, -1), key: "calories_in", value: 3150 },
+      { day: TODAY, key: "calories_in", value: 1375 },
+      { day: TODAY, key: "protein", value: 90 },
+      { day: addDays(TODAY, 1), key: "calories_in", value: 2700 },
+    ]);
+    expect((await getHealthHub(query)).nutrition).toEqual({ value: 1375, reason: null, provisional: true });
+
+    await store.replaceDailyValues({ from: TODAY, to: TODAY }, ["calories_in"], []);
+    expect((await getHealthHub(query)).nutrition).toEqual({ value: null, reason: "no_data", provisional: false });
+
+    await store.upsertDailyValues([{ day: TODAY, key: "calories_in", value: 0 }]);
+    expect((await getHealthHub(query)).nutrition).toEqual({ value: 0, reason: null, provisional: true });
+
+    await store.upsertDailyValues([
+      { day: TODAY, key: "calories_in", value: 1487 },
+      { day: TODAY, key: "nutrition_missing_energy", value: 1 },
+    ]);
+    expect((await getHealthHub(query)).nutrition).toEqual({ value: null, reason: "no_data", provisional: false });
+
+    await store.replaceDailyValues({ from: TODAY, to: TODAY }, ["nutrition_missing_energy"], []);
+    query.profile.nutrition = { excludedDays: [TODAY], plan: null };
+    expect((await getHealthHub(query)).nutrition).toEqual({ value: null, reason: "no_data", provisional: false });
   });
 });

@@ -236,12 +236,22 @@ function HeartRate({ hr, now }: { hr: HealthHubVM["heartRate"]; now: number }) {
   );
 }
 
-/** The way to Nutrition (spec §7.22): static, so the hub's query stays as it is. */
-function NutritionCard() {
+/** Today's intake uses the same total and missing-data rules as the Nutrition detail. */
+function NutritionCard({ m }: { m?: HealthHubVM["nutrition"] }) {
   const { t } = useTranslation("health");
+  const { t: e } = useTranslation("energy");
   return (
     <SectionShell variant="card" title={t("title.nutrition")} info={false} href="/nutrition">
-      <Text className={CAPTION}>{t("hub.nutritionBody")}</Text>
+      <View className="gap-1">
+        <MetricState
+          metric={m}
+          skeleton={<SkeletonText lh={40} fs={36} className="w-[100px]" />}
+          renderReason={() => <ValueUnit value="--" className={cn(TILE, "text-muted-foreground")} />}
+        >
+          {(kcal) => <ValueUnit value={formatValue("grouped", kcal)} unit="kcal" className={TILE} />}
+        </MetricState>
+        <Text className={CAPTION}>{m?.value === null ? e("caloriesUnknown") : e("today")}</Text>
+      </View>
     </SectionShell>
   );
 }
@@ -275,7 +285,7 @@ export function HealthScreen() {
         <SectionShell variant="card" title={t("title.heartRate")} info={cardInfo("Heart rate")} href="/health/heart-rate">
           <HeartRate hr={vm.heartRate} now={now} />
         </SectionShell>
-        <NutritionCard />
+        <NutritionCard m={vm.nutrition} />
       </View>
       <Text className={cn(CAPTION, "text-center")}>{t("hub.footnote")}</Text>
     </PageShell>
