@@ -98,24 +98,31 @@ describe("intake and weight energy balance", () => {
     expect((await getNutrition(ctx, custom, day)).energy).toEqual(past.energy);
   });
 
-  it("withholds incomplete imported calories and reviewed partial days without altering source data", async () => {
+  it("shows known calories on incomplete days but withholds them from expenditure estimates", async () => {
     await seedEnergy();
     const gap = addDays(TODAY, -2);
     await store.upsertDailyValues([{ day: gap, key: "nutrition_missing_energy", value: 1 }, { day: gap, key: "protein", value: 300 }]);
     const partial = await getNutrition(ctx, NO_CUSTOM, gap);
-    expect(partial.totals).toMatchObject({ kcal: null, protein: 300 });
+    expect(partial.totals).toMatchObject({ kcal: 1970, protein: 300 });
+    expect(partial.energy).toMatchObject({ missingEnergy: true, excluded: false });
     expect(partial.energy.deficit).toBeNull();
     const held = await getNutrition(ctx, NO_CUSTOM);
     expect(held.energy).toMatchObject({ state: "holding", tdee: { tags: ["stale_baseline"] }, deficit: null });
     expect(held.energy.balanceDays.at(-3)?.kcalIn).toBeNull();
     expect(held.week).toMatchObject({ kcal: 2225, protein: 100, days: 6 });
 
+    // Macro data alone cannot supply a calorie total: do not substitute zero or a macro-derived estimate.
+    await store.replaceDailyValues({ from: gap, to: gap }, ["calories_in"], []);
+    expect((await getNutrition(ctx, NO_CUSTOM, gap)).totals).toMatchObject({ kcal: null, protein: 300 });
+    await eat(gap, 1970);
     await store.replaceDailyValues({ from: gap, to: gap }, ["nutrition_missing_energy"], []);
     ctx.profile = { ...PROFILE, nutrition: { excludedDays: [gap], plan: null } };
     const reviewed = await getNutrition(ctx, NO_CUSTOM);
     expect(reviewed.energy.state).toBe("holding");
     expect(reviewed.week.days).toBe(6);
-    expect((await getNutrition(ctx, NO_CUSTOM, gap)).energy.excluded).toBe(true);
+    const reviewedDay = await getNutrition(ctx, NO_CUSTOM, gap);
+    expect(reviewedDay.totals).toMatchObject({ kcal: 1970, protein: 300 });
+    expect(reviewedDay.energy).toMatchObject({ excluded: true, missingEnergy: false, deficit: null });
     expect(await store.dailyValues({ from: gap, to: gap })).toContainEqual({ day: gap, key: "calories_in", value: 1970 });
     ctx.profile = { ...PROFILE, nutrition: { excludedDays: [], plan: null } };
     expect((await getNutrition(ctx, NO_CUSTOM)).energy.tdee.value).toBeCloseTo(2450, 6);

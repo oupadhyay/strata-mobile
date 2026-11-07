@@ -69,7 +69,7 @@ export type NutritionVM = {
   today: string;
   day: string;
   timeZone: string;
-  /** The selected day's totals; incomplete calorie coverage stays null. */
+  /** The selected day's known logged totals; incomplete calories are display-only, not usable intake for estimates. */
   totals: Totals;
   /** The targets in force: the person's own where set, else Pulse's suggestion. */
   targets: Targets;
@@ -195,10 +195,9 @@ export async function getNutrition(ctx: QueryCtx, custom: CustomTargets, day = t
   const pulse = sumFood(counted);
   const totals: Totals = { kcal: null, protein: null, carbs: null, fat: null, fiber: pulse.fiber };
   for (const m of MACROS) {
-    const v = row ? FOOD_PICK[m](row) : undefined;
+    const v = row?.extra[m === "kcal" ? "calories_in" : m];
     totals[m] = finite(v) ? v : null;
   }
-  if (energy.excluded) totals.kcal = null;
 
   // The roll-up beyond the Fitbit entries listed: with Health Connect they match; a Google account sends totals only.
   const listed = sumFood(entries.filter((e) => e.source !== "pulse"));
