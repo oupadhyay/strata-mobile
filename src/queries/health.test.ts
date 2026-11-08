@@ -66,6 +66,9 @@ describe("getHealthHub", () => {
     ]);
     expect((await getHealthHub(query)).nutrition).toEqual({ value: null, reason: "no_data", provisional: false });
 
+    query.profile.nutrition = { excludedDays: [], completeDays: [TODAY], plan: null };
+    expect((await getHealthHub(query)).nutrition).toEqual({ value: 1487, reason: null, provisional: true });
+
     await store.replaceDailyValues({ from: TODAY, to: TODAY }, ["nutrition_missing_energy"], []);
     query.profile.nutrition = { excludedDays: [TODAY], plan: null };
     expect((await getHealthHub(query)).nutrition).toEqual({ value: null, reason: "no_data", provisional: false });

@@ -9,6 +9,7 @@ const HALF_LIFE = 7;
 const WINDOW = 28;
 const MIN_DAYS = 14;
 const MIN_WEIGHTS = 7;
+const PRELIMINARY_DAYS = 7;
 const MAX_WEIGHT_AGE = 7;
 
 /** One local day, oldest first. Intake is the whole day's food; a weigh-in precedes that day's intake. */
@@ -16,6 +17,8 @@ export type IntakeDay = { day: string; kcal: number | null; weightKg: number | n
 export type ExpenditureDay = {
   day: string;
   tdee: Metric<number>;
+  /** Display-only early fit; never a calibrated baseline or a calorie-target input. */
+  preliminaryTdee: Metric<number>;
   state: "calibrating" | "ready" | "holding";
   estimatedOn: string | null;
   trendKg: Metric<number>;
@@ -69,7 +72,9 @@ export function expenditureHistory(days: readonly IntakeDay[]): ExpenditureDay[]
     const last = points.at(-1);
     const intakeDays = first && last ? daysBetween(first.day, last.day) : 0;
     let ready = false;
-    if (first && last && intakeDays >= MIN_DAYS && points.length >= MIN_WEIGHTS && daysBetween(last.day, r.day) <= MAX_WEIGHT_AGE) {
+    let preliminary: number | null = null;
+    // A week and two distinct weigh-ins permit an early fit, not a calibrated estimate.
+    if (first && last && intakeDays >= PRELIMINARY_DAYS && points.length >= 2 && daysBetween(last.day, r.day) <= MAX_WEIGHT_AGE) {
       const weighted = points.map((p) => ({ ...p, w: 2 ** (-daysBetween(p.day, r.day) / HALF_LIFE) }));
       const mass = weighted.reduce((s, p) => s + p.w, 0);
       const mx = weighted.reduce((s, p) => s + p.w * p.x, 0) / mass;
@@ -78,14 +83,17 @@ export function expenditureHistory(days: readonly IntakeDay[]): ExpenditureDay[]
       const tdee = -weighted.reduce((s, p) => s + p.w * (p.x - mx) * (p.y - my), 0) / variance;
       // Reject an implausible fit; clamping would turn bad data into a believable number.
       if (tdee >= 800 && tdee <= 8000) {
-        estimate = tdee;
-        estimatedOn = last.day;
-        ready = true;
+        if (intakeDays >= MIN_DAYS && points.length >= MIN_WEIGHTS) {
+          estimate = tdee;
+          estimatedOn = last.day;
+          ready = true;
+        } else preliminary = tdee;
       }
     }
     const out: ExpenditureDay = {
       day: r.day,
       tdee: metric(estimate, !ready),
+      preliminaryTdee: metric(estimate === null ? preliminary : null),
       state: ready ? "ready" : estimate === null ? "calibrating" : "holding",
       estimatedOn,
       trendKg: metric(weightDay && daysBetween(weightDay, r.day) <= MAX_WEIGHT_AGE ? trend : null),

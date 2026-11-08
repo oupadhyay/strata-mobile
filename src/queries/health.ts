@@ -60,7 +60,7 @@ export async function getHealthHub(ctx: QueryCtx): Promise<HealthHubVM> {
   const today = todayOf(ctx);
   const rows = await loadDays(ctx, addDays(today, -35), today);
   const row = rows.get(today);
-  const kcal = intakeOf(row, ctx.profile.nutrition?.excludedDays.includes(today));
+  const kcal = intakeOf(row, ctx.profile.nutrition);
   const [hsVm, monitor, fit, stressSeries, heartRate] = await Promise.all([
     getHealthspan(today, ctx),
     getMonitor(today, ctx, rows),

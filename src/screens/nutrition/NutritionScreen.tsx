@@ -27,6 +27,7 @@ import { SectionShell } from "@/ui/shells/SectionShell";
 import { Skeleton } from "@/ui/Skeleton";
 import { Text } from "@/ui/Text";
 import { toast } from "@/ui/Toast";
+import { ActivityComparison, ActivityComparisonInfo } from "./ActivityComparison";
 import { Today } from "./NutritionHero";
 
 const grouped = (v: number) => FORMATS.grouped(v);
@@ -159,8 +160,12 @@ export function NutritionScreen() {
             <CalorieBalanceChart summary={e("chart")} data={data} goal={vm.targets.kcal.value} goalLabel={t("history.target")} />
             <Text className={CAPTION}>{e(data.some((d) => d.kcalOut !== null) ? "chartKey" : "intakeKey")}</Text>
           </View>
-          {energy.missingEnergy && <Text className={CAPTION}>{e("missingEnergy")}</Text>}
-          <SwitchRow rule label={e("partial")} value={energy.excluded} disabled={pending} onChange={(on) => void persist({ ...prefs, excludedDays: on ? [...prefs.excludedDays, vm.day] : prefs.excludedDays.filter((d) => d !== vm.day) })} />
+          {energy.missingEnergy && energy.excluded && <Text className={CAPTION}>{e("missingEnergy")}</Text>}
+          <SwitchRow rule label={e("partial")} value={energy.excluded} disabled={pending} onChange={(on) => void persist({
+            ...prefs,
+            excludedDays: [...prefs.excludedDays.filter((d) => d !== vm.day), ...(on ? [vm.day] : [])],
+            completeDays: [...(prefs.completeDays ?? []).filter((d) => d !== vm.day), ...(!on ? [vm.day] : [])],
+          })} />
         </SectionShell>
       }
       secondary={[
@@ -178,12 +183,8 @@ export function NutritionScreen() {
             </View>
           )}
         </SectionShell>,
-        <SectionShell key="activity" variant="card" title={e("activity")} info={{ title: e("activity"), body: [e("hrNote"), e("wearableNote")].join("\n\n") }}>
-          <KeyStatRow variant="row" label={e("recordedMinutes")} metric={metric(energy.activity.recordedMinutes || null)} unit="min" format="int" direction="none" />
-          <KeyStatRow variant="row" label={e("hrEnergy")} metric={energy.activity.kcal} unit="kcal" format="grouped" direction="none" />
-          <Text className={CAPTION}>{e("hrCoverage", { modeled: grams(energy.activity.modeledMinutes), recorded: grams(energy.activity.recordedMinutes) })}</Text>
-          <Text className={CAPTION}>{e("activityNote")}</Text>
-          <KeyStatRow variant="row" label={e("wearable")} metric={{ ...metric(energy.wearableKcal), provisional: vm.day === vm.today }} unit="kcal" format="grouped" direction="none" />
+        <SectionShell key="activity" variant="card" title={e("activity")} info={{ title: e("activity"), body: <ActivityComparisonInfo energy={energy} /> }}>
+          <ActivityComparison energy={energy} />
         </SectionShell>,
         <SectionShell key="averages" variant="card" title={t("averages.title")} info={{ title: t("averages.title"), body: e("averagesNote") }}>
           <View className="gap-3">

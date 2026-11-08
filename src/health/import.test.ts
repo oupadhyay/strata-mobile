@@ -390,6 +390,29 @@ describe("exercises and daily values", () => {
     expect(exercises).toEqual([expect.objectContaining({ id: "b", name: "Morning ride", calories: 150, distanceM: 5000 })]);
   });
 
+  it("keeps clipped minute energy from one wearable source, not coarse or duplicate device calories", () => {
+    const startTs = sec("2026-10-02", "07:00:00");
+    const record = (id: string, start: number, end: number, kcal: number, origin = "com.fitbit", device = 1) => ({
+      metadata: { ...meta(id, origin), device: { type: device } },
+      startTime: new Date((startTs + start) * 1000).toISOString(), endTime: new Date((startTs + end) * 1000).toISOString(), energy: energy(kcal),
+    });
+    const input = {
+      ExerciseSession: [{ metadata: meta("racket", "com.fitbit"), startTime: at("2026-10-02", "07:00:00"), endTime: at("2026-10-02", "07:03:00"), exerciseType: ExerciseType.OTHER_WORKOUT }],
+      TotalCaloriesBurned: [record("before", -30, 30, 6), record("middle", 30, 90, 8), record("after", 150, 210, 10),
+        record("coarse", 90, 150 + 1, 100), record("phone", 0, 60, 900, "com.fitbit", 2), record("mirror", 0, 60, 999, "com.other")],
+      ActiveCaloriesBurned: [record("active", 90, 150, 4)],
+    };
+    const [workout] = mapRecords(input, TZ).exercises;
+    expect(workout.calorieIntervals).toEqual([
+      { startTs, endTs: startTs + 30, kcal: 3, active: false },
+      { startTs: startTs + 30, endTs: startTs + 90, kcal: 8, active: false },
+      { startTs: startTs + 150, endTs: startTs + 180, kcal: 5, active: false },
+      { startTs: startTs + 90, endTs: startTs + 150, kcal: 4, active: true },
+    ]);
+    expect(workout.calories).toBe(4); // legacy active-only aggregate, never total + active
+    expect(mapRecords({ ...input, TotalCaloriesBurned: input.TotalCaloriesBurned.slice().reverse() }, TZ).exercises).toEqual([workout]);
+  });
+
   it("names the type, sums overlapping active kcal and distance, and drops sessions under 2 minutes", () => {
     const { exercises, dailyValues } = mapRecords(
       {

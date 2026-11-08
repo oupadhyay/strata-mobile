@@ -5,7 +5,7 @@
 // app comes back from Health Connect's settings.
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { AppState, Pressable, Share, View } from "react-native";
+import { AppState, Pressable, View } from "react-native";
 import Animated, { cancelAnimation, Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
 import { Check, ChevronDown, Minus, RefreshCw, TriangleAlert } from "lucide-react-native";
 import { askPermissions, openHealthConnectSettings, permissionState, READ_TYPES, skippedTypes, type PermissionState, type ReadType } from "@/health/connect";
@@ -216,7 +216,12 @@ export function DataSource({ now }: { now: number }) {
     setChecking(true);
     try {
       const { text } = await runDataCheck(appStore(), { timeZone: appState().profile?.timeZone ?? "UTC" });
-      await Share.share({ message: text, title: t("source.checkShareTitle") });
+      // Record-level diagnostics can exceed Android's text-intent limit; share a local cache file as other exports do.
+      const [{ File, Paths }, Sharing] = await Promise.all([import("expo-file-system"), import("expo-sharing")]);
+      const file = new File(Paths.cache, `strata-data-check-${Date.now()}.txt`);
+      file.create();
+      file.write(text);
+      await Sharing.shareAsync(file.uri, { mimeType: "text/plain", dialogTitle: t("source.checkShareTitle") });
     } catch {
       toast.error(t("source.checkFailed"));
     }
@@ -293,7 +298,7 @@ export function DataSource({ now }: { now: number }) {
         <View className="mt-4 gap-2 border-t border-border pt-4">
           <Text className={ROW_LABEL}>{t("source.dataCheck")}</Text>
           <Text className={HINT}>{t("source.dataCheckHint")}</Text>
-          <Button variant="secondary" disabled={checking} onPress={() => void dataCheck()}>
+          <Button variant="secondary" disabled={checking || syncing} onPress={() => void dataCheck()}>
             {checking ? t("source.checking") : t("source.runDataCheck")}
           </Button>
         </View>

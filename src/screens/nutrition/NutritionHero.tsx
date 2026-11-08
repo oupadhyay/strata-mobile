@@ -52,7 +52,7 @@ export function Today({ vm }: { vm: NutritionVM }) {
   const { totals: t, targets } = vm;
   const kcal = targets.kcal.value;
   const left = t.kcal === null ? null : kcal - t.kcal;
-  const incomplete = vm.energy.missingEnergy || vm.energy.excluded;
+  const incomplete = vm.energy.excluded;
   const referenceOnly = !targets.kcal.custom && vm.energy.tdee.value === null;
   // The hero slot centres and shrinks its content, so the card takes the page's width (16 px gutters) itself.
   const { width } = useWindowDimensions();

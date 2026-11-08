@@ -54,8 +54,9 @@ export { forgetChanges };
  * app's records are kept, the largest source per day for measured totals. 8: near-identical workouts from different
  * apps are imported once, retaining distinct sports, partial overlaps and records with no source.
  * 9: nutrition uses one origin per day (Lose It!, then MyFitnessPal preferred) and records missing calorie coverage.
+ * 10: workouts retain minute-level total/active wearable energy for exercise-model fallback, without changing daily totals.
  */
-export const IMPORT_VERSION = 9;
+export const IMPORT_VERSION = 10;
 
 /**
  * How far before the window's first local midnight the reads start. Health Connect returns a record only to a read whose
@@ -462,7 +463,7 @@ export async function syncHealthConnect(store: Store, opts: SyncOptions): Promis
     const sessionIds = new Set(sessions.map((s) => s.id));
     const segments = sleep.segments.filter((g) => sessionIds.has(g.sessionId));
     await slice();
-    const exercises = inWindow(await sliced(mapExercisesSteps(input.ExerciseSession ?? [], input.ActiveCaloriesBurned, input.Distance, tz)));
+    const exercises = inWindow(await sliced(mapExercisesSteps(input.ExerciseSession ?? [], input.ActiveCaloriesBurned, input.Distance, tz, input.TotalCaloriesBurned)));
     const dailyValues = [...inWindow(await sliced(mapDailyValuesSteps(input, tz))), ...derived];
     const metrics = inWindow(await sliced(mapMetricsSteps(input, sessions, stepsByDay, tz)));
     await slice();

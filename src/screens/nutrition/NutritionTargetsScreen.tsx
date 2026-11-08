@@ -2,13 +2,16 @@
 import { useRef, useState } from "react";
 import { View } from "react-native";
 import { useTranslation } from "react-i18next";
+import { limitText } from "@/lib/format";
 import { getLocale, localeFixed } from "@/lib/locale";
+import { quantity } from "@/lib/units";
 import { MACRO_KEYS, NO_CUSTOM, parseMacroSplit, parseTarget, resolveMacros, type CustomTargets, type MacroKey, type Targets } from "@/nutrition/targets";
 import { getNutrition } from "@/queries/nutrition";
 import { ErrorView } from "@/screens/health/ErrorView";
 import { HINT, ROW, ROW_LABEL, TextField } from "@/screens/settings/controls";
 import { useScreen } from "@/screens/useScreen";
 import { useNutritionTargets } from "@/state/nutrition";
+import { setNutrition, useApp } from "@/state/app";
 import { Button } from "@/ui/Button";
 import { cn } from "@/ui/cn";
 import { Segmented } from "@/ui/Segmented";
@@ -20,6 +23,43 @@ import { Text } from "@/ui/Text";
 import { toast } from "@/ui/Toast";
 
 type MacroMode = "auto" | "grams" | "percent";
+
+export function WeightGoalEditor() {
+  const { t } = useTranslation("energy");
+  const profile = useApp((s) => s.profile);
+  const q = quantity("kg", profile?.display?.units);
+  const [text, setText] = useState(() => profile?.nutrition?.goalWeightKg == null ? "" : localeFixed(q.value(profile.nutrition.goalWeightKg), 1));
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const saving = useRef(false);
+  const normalized = text.trim().replace(",", ".");
+  const kg = normalized === "" ? null : /^\d+(\.\d+)?$/.test(normalized) ? q.stored(Number(normalized)) : NaN;
+  const invalid = kg !== null && (!Number.isFinite(kg) || kg < 20 || kg > 300);
+  const submit = async () => {
+    if (saving.current || invalid || !profile) return;
+    saving.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      await setNutrition({ ...(profile.nutrition ?? { excludedDays: [], plan: null }), goalWeightKg: kg });
+      toast.success(t("saved"));
+    } catch {
+      setError(t("saveFailed"));
+    } finally {
+      saving.current = false;
+      setPending(false);
+    }
+  };
+  return <View className="gap-3">
+    <View className={ROW}>
+      <Text className={ROW_LABEL}>{t("weightGoal")}</Text>
+      <View className="w-32"><TextField variant="number" accessibilityLabel={t("weightGoal")} keyboardType="decimal-pad" returnKeyType="done" selectTextOnFocus value={text} onChangeText={(s) => { setText(s); setError(null); }} editable={!pending} invalid={invalid} onSubmitEditing={() => void submit()} right={<Text className={cn(HINT, "px-2")}>{q.unit}</Text>} /></View>
+    </View>
+    <Text accessibilityLiveRegion="polite" className={cn(HINT, invalid && "text-recovery-red-text")}>{invalid ? t("goalRange", { min: limitText(20, "kg", "min"), max: limitText(300, "kg", "max"), unit: q.unit }) : t("goalHint")}</Text>
+    <Button variant="outline" disabled={pending || invalid} onPress={() => void submit()}>{pending ? t("saving") : t("saveGoal")}</Button>
+    {!!error && <Text accessibilityLiveRegion="polite" className="text-sm text-recovery-red-text">{error}</Text>}
+  </View>;
+}
 
 function TargetEditor({ suggested }: { suggested: Targets }) {
   const { t } = useTranslation("nutrition");
@@ -129,6 +169,7 @@ function TargetEditor({ suggested }: { suggested: Targets }) {
 
 export function NutritionTargetsScreen() {
   const { t } = useTranslation("nutrition");
+  const { t: e } = useTranslation("energy");
   const [day] = useSelectedDay();
   const { ready } = useNutritionTargets();
   // Suggestions do not depend on custom targets. Saving must not replace the active form with a new query skeleton.
@@ -144,6 +185,11 @@ export function NutritionTargetsScreen() {
           <TargetEditor suggested={vm.suggested} />
         </SectionShell>
       }
+      secondary={[
+        <SectionShell key="goal" variant="card" title={e("weightGoal")} info={{ title: e("weightGoal"), body: e("goalNote") }}>
+          <WeightGoalEditor />
+        </SectionShell>,
+      ]}
     />
   );
 }

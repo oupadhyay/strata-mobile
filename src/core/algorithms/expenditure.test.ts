@@ -28,9 +28,28 @@ describe("exponentially weighted expenditure", () => {
 
   it("requires fourteen complete intervals, not fourteen dates or two weigh-ins", () => {
     expect(expenditureHistory(history(14)).at(-1)!.tdee.value).toBeNull();
+    expect(expenditureHistory(history(14)).at(-1)!.preliminaryTdee.value).toBeCloseTo(2450, 6);
     expect(expenditureHistory(history(15)).at(-1)!.tdee.value).toBeCloseTo(2450, 6);
     const sparse = history(20).map((r, i) => ({ ...r, weightKg: i === 0 || i === 19 ? r.weightKg : null }));
     expect(expenditureHistory(sparse).at(-1)!.state).toBe("calibrating");
+  });
+
+  it("exposes a separate early fit only across a complete week with two recent weigh-ins", () => {
+    const rows = history(16).map((r, i) => ({ ...r, weightKg: i === 0 || i === 7 ? r.weightKg : null }));
+    const out = expenditureHistory(rows);
+    expect(out[6].preliminaryTdee.value).toBeNull();
+    expect(out[7]).toMatchObject({ state: "calibrating", tdee: { value: null }, estimatedOn: null, preliminaryTdee: { provisional: true, reason: null } });
+    expect(out[7].preliminaryTdee.value).toBeCloseTo(2450, 6);
+    expect(out[14].preliminaryTdee.value).toBeCloseTo(2450, 6); // latest weight exactly seven days old
+    expect(out[15].preliminaryTdee.value).toBeNull(); // stale early fits are not held
+    expect(out.every((d) => d.tdee.value === null)).toBe(true);
+    for (const replacement of [{ kcal: null }, { excluded: true }]) {
+      expect(expenditureHistory(rows.map((r, i) => i === 3 ? { ...r, ...replacement } : r))[7].preliminaryTdee.value).toBeNull();
+    }
+    expect(expenditureHistory(rows.filter((_, i) => i !== 3))[6].preliminaryTdee.value).toBeNull();
+    // A future weigh-in and today's food cannot change an earlier fit.
+    expect(expenditureHistory(rows.slice(0, 8))).toEqual(out.slice(0, 8));
+    expect(expenditureHistory(rows.map((r, i) => i === 7 ? { ...r, kcal: 7000 } : r))[7].preliminaryTdee).toEqual(out[7].preliminaryTdee);
   });
 
   it("weights a recent weight change exponentially rather than fitting an unweighted line", () => {
@@ -47,6 +66,7 @@ describe("exponentially weighted expenditure", () => {
       const result = expenditureHistory(rows);
       expect(result[21]).toMatchObject({ state: "holding", tdee: { value: expect.any(Number), tags: ["stale_baseline"] } });
       expect(result[34].state).toBe("holding");
+      expect(result[34].preliminaryTdee.value).toBeNull(); // no early fit is promoted during a mature baseline hold
       expect(result[35].state).toBe("ready");
       expect(result[35].tdee.value).toBeCloseTo(2450, 6);
     }
@@ -62,6 +82,7 @@ describe("exponentially weighted expenditure", () => {
       weightKg += (kcal - 2360) / 7700;
       return out;
     });
+    expect(expenditureHistory(rows)[10].preliminaryTdee.value).toBeCloseTo(2360, 6);
     expect(expenditureHistory(rows).at(-1)!.tdee.value).toBeCloseTo(2360, 6);
     expect(expenditureHistory(rows.map((r, i) => i === 9 ? { ...r, kcal: null } : r)).at(-1)!.tdee.value).toBeNull();
   });
@@ -69,6 +90,7 @@ describe("exponentially weighted expenditure", () => {
   it("withholds implausible fits and stops presenting an old weight as current", () => {
     const rows = history(15).map((r, i) => ({ ...r, weightKg: 83 - i * 2 }));
     expect(expenditureHistory(rows).at(-1)!.tdee.value).toBeNull();
+    expect(expenditureHistory(rows)[7].preliminaryTdee.value).toBeNull();
     const missing = history(25).map((r, i) => ({ ...r, weightKg: i > 15 ? null : r.weightKg }));
     expect(expenditureHistory(missing).at(-1)).toMatchObject({ state: "holding", trendKg: { value: null } });
   });

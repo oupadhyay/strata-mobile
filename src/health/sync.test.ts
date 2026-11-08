@@ -182,10 +182,20 @@ describe("syncHealthConnect re-import", () => {
 
   it("re-imports once: the next sync is incremental again", async () => {
     const store = await staleStore();
+    storage.set(IMPORT_STATE_KEY, JSON.stringify({ version: IMPORT_VERSION - 1 }));
+    const data = fixture();
+    data.ExerciseSession = [{ metadata: meta("racket", FITBIT), startTime: "2026-10-06T10:00:00Z", endTime: "2026-10-06T10:02:00Z", exerciseType: 0 } as never];
+    data.TotalCaloriesBurned.push(...[0, 1].map((i) => ({ metadata: meta(`minute-${i}`, FITBIT), startTime: `2026-10-06T10:0${i}:00Z`, endTime: `2026-10-06T10:0${i + 1}:00Z`, energy: { inKilocalories: i + 3 } })));
+    hc.permissionState.mockResolvedValue({ granted: ["ExerciseSession", "TotalCaloriesBurned", "SleepSession"], missing: [], history: true, background: true });
+    hc.readAll.mockImplementation(startTimeRead(data));
     await syncHealthConnect(store, { timeZone: TZ, now: NOW, historyDays: 5 });
+    const imported = (await store.allExercises())[0];
+    expect(imported.id).toBe("racket");
+    expect(imported.calorieIntervals).toEqual([0, 1].map((i) => ({ startTs: sec(`2026-10-06T10:0${i}:00Z`), endTs: sec(`2026-10-06T10:0${i + 1}:00Z`), kcal: i + 3, active: false })));
     const again = await syncHealthConnect(store, { timeZone: TZ, now: NOW, historyDays: 5 });
     expect(again.counts.reimport).toBeUndefined();
     expect(again.counts.full).toBeUndefined();
+    expect((await store.allExercises())[0]).toEqual(imported);
   });
 
   it("leaves days out of stage 1 when a sync brings the same samples again, and puts back a day whose samples changed", async () => {

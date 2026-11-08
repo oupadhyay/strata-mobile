@@ -87,6 +87,8 @@ const MIGRATIONS = [
   "alter table profile add column display text",
   // Nutrition review and the original weight-plan snapshot, JSON { excludedDays, plan }.
   "alter table profile add column nutrition text",
+  // Minute-level wearable energy for exercise estimates; old workout calorie totals retain their active-only meaning.
+  "alter table exercises add column calorie_intervals text",
 ];
 
 const DAY = 86_400;
@@ -112,7 +114,7 @@ type SessionRow = {
   asleep_min: number | null; awake_min: number | null; deep_min: number | null; light_min: number | null; rem_min: number | null;
 };
 type SegmentRow = { session_id: string; start_ts: number; end_ts: number; stage: Segment["stage"] };
-type ExerciseRow = { id: string; day: string; start_ts: number; end_ts: number; type: string; name: string | null; calories: number | null; distance_m: number | null };
+type ExerciseRow = { id: string; day: string; start_ts: number; end_ts: number; type: string; name: string | null; calories: number | null; distance_m: number | null; calorie_intervals: string | null };
 type BucketRow = { bucket: number; offsets: string; vals: string };
 type ScoresRow = {
   day: string; scoring_version: number; strain: string | null; activities: string | null; session_rhr_bpm: number | null;
@@ -177,6 +179,7 @@ const exerciseOf = (r: ExerciseRow): Exercise => ({
   name: r.name,
   calories: r.calories,
   distanceM: r.distance_m,
+  calorieIntervals: parse<Exercise["calorieIntervals"]>(r.calorie_intervals) ?? undefined,
 });
 
 const SCORE_JSON = ["strain", "activities", "recovery", "sleep", "training_load", "strain_target", "sleep_planner", "energy_bank", "stress", "health_monitor", "healthspan", "fitness", "journal_impact", "detected", "hrv_status", "training"] as const;
@@ -334,8 +337,8 @@ class SqliteStore implements Store {
     await this.tx((db) =>
       this.many(
         db,
-        "insert or replace into exercises (id, day, start_ts, end_ts, type, name, calories, distance_m) values (?, ?, ?, ?, ?, ?, ?, ?)",
-        rows.map((e) => [e.id, e.day, e.startTs, e.endTs, e.type, e.name, e.calories, e.distanceM]),
+        "insert or replace into exercises (id, day, start_ts, end_ts, type, name, calories, distance_m, calorie_intervals) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows.map((e) => [e.id, e.day, e.startTs, e.endTs, e.type, e.name, e.calories, e.distanceM, json(e.calorieIntervals)]),
       ),
     );
   }

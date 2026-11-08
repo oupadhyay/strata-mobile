@@ -2,6 +2,7 @@
 // The source's daily roll-up plus existing Pulse food entries count a duplicated meal once (food.ts). The original
 // meal and wearable balance fields remain available to existing callers; the companion screen uses `energy`.
 import { metricsWithLoggedBody } from "@/data/body";
+import type { Profile } from "@/data/types";
 import { i18n } from "@/i18n/config";
 import { addDays, localMidnight } from "@/lib/time";
 import type { Metric } from "@/lib/reasons";
@@ -10,7 +11,7 @@ import { NO_CUSTOM, resolveTargets, type CustomTargets, type Targets } from "@/n
 import { type DayRow, finite, loadDays, type QueryCtx, todayOf } from "./common";
 import { countedPulse, EMPTY_TOTALS, foodEntry, mealOverlaps, roundNutrient, sumFood, type FoodEntry, type FoodVia, type Totals } from "./food";
 import { MEALS, type Meal } from "./log";
-import { getNutritionEnergy, intakeOf } from "./nutritionExtras";
+import { getNutritionEnergy, incompleteDay, intakeOf } from "./nutritionExtras";
 
 /** The nutrients the overview averages and charts (fiber is Pulse's alone, so it shows only in today's total). */
 export const MACROS = ["kcal", "protein", "carbs", "fat"] as const;
@@ -69,7 +70,7 @@ export type NutritionVM = {
   today: string;
   day: string;
   timeZone: string;
-  /** The selected day's known logged totals; incomplete calories are display-only, not usable intake for estimates. */
+  /** Known logged totals; incomplete calories are display-only unless the person confirms the day as complete. */
   totals: Totals;
   /** The targets in force: the person's own where set, else Pulse's suggestion. */
   targets: Targets;
@@ -100,14 +101,15 @@ export type NutritionVM = {
 const mealLabel = (meal: Meal | "UNKNOWN"): string => (meal === "UNKNOWN" ? i18n.t("nutrition:meal.other") : (MEALS.find((m) => m[0] === meal)?.[1] ?? meal));
 const MEAL_ORDER: (Meal | "UNKNOWN")[] = ["BREAKFAST", "LUNCH", "DINNER", "SNACK", "UNKNOWN"];
 const FOOD_PICK: Record<Macro, (r: DayRow) => number | null | undefined> = {
-  kcal: (r) => intakeOf(r),
+  kcal: (r) => r.extra.calories_in,
   protein: (r) => r.extra.protein,
   carbs: (r) => r.extra.carbs,
   fat: (r) => r.extra.fat,
 };
 
 /** Each macro's mean over the rows that have it; `days` counts the rows with calories (food logged). */
-export function averagesOf(rows: (DayRow | undefined)[], span: number): Averages {
+export function averagesOf(rows: (DayRow | undefined)[], span: number, review?: Profile["nutrition"]): Averages {
+  rows = rows.map((r) => incompleteDay(r, review) ? undefined : r);
   const coverage = rows.map((r) => finite(r ? FOOD_PICK.kcal(r) : undefined));
   const out: Averages = { kcal: null, protein: null, carbs: null, fat: null, days: coverage.filter(Boolean).length, span, coverage };
   for (const m of MACROS) {
@@ -171,20 +173,16 @@ export async function getNutrition(ctx: QueryCtx, custom: CustomTargets, day = t
   const weights = (await metricsWithLoggedBody(ctx.store)).filter((r) => r.day <= day && finite(r.weightKg));
   const weightKg = weights.at(-1)?.weightKg ?? null;
   // A fixed start at the first weigh-in keeps the EWMA identical when browsing history or appending new days.
-  // Six extra days complete the earliest rolling-average window, even before the first weigh-in.
-  const from = weights[0]?.day < addDays(day, -36) ? weights[0].day : addDays(day, -36);
+  // Sixty completed days also cover the preceding 30-day net comparison, even before the first weigh-in.
+  const from = weights[0]?.day < addDays(day, -60) ? weights[0].day : addDays(day, -60);
   const [rows, logged, synced] = await Promise.all([
     loadDays(ctx, from, day),
     ctx.store.loggedEntries(localMidnight(day, ctx.timeZone), 10_000),
     ctx.store.dailyValues({ from: day, to: day }),
   ]);
   const energy = await getNutritionEnergy(ctx, rows, day, custom.kcal);
-  const excluded = new Set(ctx.profile.nutrition?.excludedDays ?? []);
-  const before = (n: number, end = day) => Array.from({ length: n }, (_, k) => {
-    const d = addDays(end, -n + k);
-    const r = rows.get(d);
-    return excluded.has(d) || (r?.extra.nutrition_missing_energy ?? 0) > 0 ? undefined : r;
-  });
+  const review = ctx.profile.nutrition;
+  const before = (n: number, end = day) => Array.from({ length: n }, (_, k) => rows.get(addDays(end, -n + k)));
 
   const entries = logged.flatMap((r) => {
     const e = r.day === day ? foodEntry(r) : null;
@@ -225,16 +223,16 @@ export async function getNutrition(ctx: QueryCtx, custom: CustomTargets, day = t
     balance: calorieBalance(rows, day, targets.kcal.value),
     energy,
     suggested: resolveTargets(NO_CUSTOM, basis),
-    week: averagesOf(before(7), 7),
-    month: averagesOf(before(30), 30),
+    week: averagesOf(before(7), 7, review),
+    month: averagesOf(before(30), 30, review),
     rolling: Array.from({ length: 30 }, (_, k) => {
       const date = addDays(day, k - 30);
-      return { date, ...averagesOf(before(7, addDays(date, 1)), 7) };
+      return { date, ...averagesOf(before(7, addDays(date, 1)), 7, review) };
     }),
     history: Array.from({ length: 30 }, (_, k) => {
       const d = addDays(day, k - 29);
       const r = rows.get(d);
-      const kcal = intakeOf(r, excluded.has(d));
+      const kcal = intakeOf(r, review);
       const protein = r?.extra.protein;
       const shown = finite(kcal) || finite(protein);
       return { day: d, kcal: finite(kcal) ? kcal : null, protein: finite(protein) ? protein : null, ...(d === today && shown && { provisional: true as const }) };

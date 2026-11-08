@@ -30,7 +30,7 @@ export type Profile = {
   /** Units and the clock (Settings › App). Absent: the phone's own (src/lib/units.ts deviceDisplayPrefs). */
   display?: DisplayPrefs | null;
   /** Local nutrition review and the original weight-plan snapshot; neither changes imported Health Connect data. */
-  nutrition?: { excludedDays: string[]; plan: WeightPlan | null };
+  nutrition?: { excludedDays: string[]; completeDays?: string[]; plan: WeightPlan | null; goalWeightKg?: number | null };
 };
 
 /** One sleep session; `day` is the local wake day. */
@@ -64,6 +64,8 @@ export type Exercise = {
   name: string | null;
   calories: number | null;
   distanceM: number | null;
+  /** Minute-or-finer wearable energy, clipped to the workout. Active and total remain distinct; absent before import v10. */
+  calorieIntervals?: { startTs: number; endTs: number; kcal: number; active: boolean }[];
 };
 
 /** Daily aggregates for a civil day. Everything optional; null when the source has none. */

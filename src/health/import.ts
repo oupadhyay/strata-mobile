@@ -542,8 +542,9 @@ export function mapExercises(
   activeCalories: ActiveCaloriesRecord[] = [],
   distance: DistanceRecord[] = [],
   tz: string,
+  totalCalories: TotalCaloriesRecord[] = [],
 ): Exercise[] {
-  return finish(mapExercisesSteps(sessions, activeCalories, distance, tz));
+  return finish(mapExercisesSteps(sessions, activeCalories, distance, tz, totalCalories));
 }
 
 /** mapExercises, pausing as it goes: every workout reads every calorie and distance record. */
@@ -552,9 +553,22 @@ export function* mapExercisesSteps(
   activeCalories: ActiveCaloriesRecord[] = [],
   distance: DistanceRecord[] = [],
   tz: string,
+  totalCalories: TotalCaloriesRecord[] = [],
 ): Steps<Exercise[]> {
   const out: Exercise[] = [];
   let n = 0;
+  // Index once: do not rescan months of minute-level totals or parse their timestamps for every workout.
+  const minuteEnergy: { source: string; origin?: string; startTs: number; endTs: number; kcal: number; active: boolean }[] = [];
+  for (const [active, records] of [[true, activeCalories], [false, totalCalories]] as const) {
+    for (const r of records) {
+      if (++n % PAUSE_EVERY === 0) yield;
+      const w = interval(r);
+      const kcal = r.energy.inKilocalories;
+      if (!(w.endTs > w.startTs && w.endTs - w.startTs <= 60 && Number.isFinite(kcal) && kcal >= 0)) continue;
+      minuteEnergy.push({ ...w, kcal, active, source: sourceOf(r), origin: r.metadata?.dataOrigin });
+    }
+  }
+  minuteEnergy.sort((a, b) => a.startTs - b.startTs);
   for (const r of yield* uniqueExercises(sessions)) {
     const w = interval(r);
     if (w.endTs - w.startTs < MIN_EXERCISE_SEC) continue;
@@ -570,6 +584,27 @@ export function* mapExercisesSteps(
     };
     const kcal = yield* largest(activeCalories, (c) => c.energy.inKilocalories);
     const metres = yield* largest(distance, (d) => d.distance.inMeters);
+    const groups = new Map<string, { own: boolean; active: boolean; seconds: number; values: NonNullable<Exercise["calorieIntervals"]> }>();
+    let lo = 0, hi = minuteEnergy.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (minuteEnergy[mid].startTs < w.startTs - 60) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo; i < minuteEnergy.length && minuteEnergy[i].startTs < w.endTs; i++) {
+      if (++n % PAUSE_EVERY === 0) yield;
+      const e = minuteEnergy[i];
+      const startTs = Math.max(w.startTs, e.startTs), endTs = Math.min(w.endTs, e.endTs);
+      if (endTs <= startTs) continue;
+      const key = `${e.active}|${e.source}`;
+      const group = groups.get(key) ?? { own: !!e.origin && e.origin === r.metadata?.dataOrigin, active: e.active, seconds: 0, values: [] };
+      group.seconds += endTs - startTs;
+      group.values.push({ startTs, endTs, kcal: e.kcal * (endTs - startTs) / (e.endTs - e.startTs), active: e.active });
+      groups.set(key, group);
+    }
+    // Prefer the workout writer, then coverage, with stable source ties. Never add two devices' calorie streams.
+    const ranked = [...groups].sort(([ka, a], [kb, b]) => Number(b.own) - Number(a.own) || b.seconds - a.seconds || ka.localeCompare(kb));
+    const calorieIntervals = [false, true].flatMap((active) => ranked.find(([, g]) => g.active === active)?.[1].values ?? []);
     out.push({
       id: r.metadata?.id ?? `hc-exercise-${w.startTs}-${w.endTs}`,
       day: localDay(w.startTs, tz),
@@ -579,6 +614,7 @@ export function* mapExercisesSteps(
       name: r.title?.trim() || null,
       calories: kcal === null ? null : Math.round(kcal),
       distanceM: metres === null ? null : Math.round(metres),
+      calorieIntervals,
     });
   }
   return out.sort((a, b) => a.startTs - b.startTs);
@@ -965,7 +1001,7 @@ export function mapRecords(input: HealthInput, tz: string): MappedRecords {
   const hrv = mapHrv(input.HeartRateVariabilityRmssd ?? []);
   const steps = mapSteps(input.Steps ?? []);
   const stepsByDay = stepsPerDay(input.Steps ?? [], tz);
-  const exercises = mapExercises(input.ExerciseSession ?? [], input.ActiveCaloriesBurned, input.Distance, tz);
+  const exercises = mapExercises(input.ExerciseSession ?? [], input.ActiveCaloriesBurned, input.Distance, tz, input.TotalCaloriesBurned);
   const dailyValues = mapDailyValues(input, tz);
   const metrics = mapMetrics(input, sessions, stepsByDay, tz);
   const externalEntries = mapExternalEntries(input, tz);
