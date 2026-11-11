@@ -23,7 +23,7 @@ Expo ships breaking changes every SDK release. APIs you remember are likely rena
 
 | Command | What it does |
 |---|---|
-| `./.agents/setup` | Prepare Java 17, SDK/build-tools 36, NDK 27.1.12297006, CMake 3.22.1 and frozen dependencies on Debian 12 x64; no APK build or server startup |
+| `./.agents/setup` | Prepare Debian's default JDK (17 on Debian 12, 21 on Debian 13), SDK/build-tools 36, NDK 27.1.12297006, CMake 3.22.1 and frozen dependencies on x64; no APK build or server startup |
 | `./scripts/build-test-apk.sh` | Build and verify a standalone ARM64 test APK with bounded Metro/native/R8/lint memory; never installs or publishes |
 | `pnpm install --frozen-lockfile` | Install the committed dependencies and patches, using `package.json`'s pnpm version |
 | `pnpm start` | Dev server (`expo start`) |
@@ -42,7 +42,7 @@ Run `pnpm typecheck && pnpm lint && pnpm test` before every commit. Run the bund
 ### Setup and Android build lessons
 
 - CI uses Node 24; use the pnpm version in `package.json`. JS validation does not need Java or an Android SDK. If setup has not run, create the ignored `expo-env.d.ts` containing `/// <reference types="expo/types" />` before typechecking, as CI does; without it Reanimated CSS styles appear mistyped.
-- **Known Debian 13 blocker:** `.agents/setup` currently requests `openjdk-17-jdk-headless`, unavailable in trixie's configured repositories, and `.agents/android-env` hardcodes its Debian 12 path. An exit 100 here is a toolchain setup failure, not an app test failure. Report it rather than claiming setup succeeded; do not repoint system package sources or silently switch JDKs.
+- Setup uses `default-jdk-headless` from the configured Debian repositories: Java 17 on Debian 12/bookworm and Java 21 on Debian 13/trixie. Do not request the removed trixie Java 17 package or repoint apt sources. `.agents/android-env` preserves a valid explicit `JAVA_HOME`; otherwise it resolves the installed `javac` symlink, replacing stale paths. Test activation in a fresh repository-root login shell, not only the setup process.
 - The builder sources `.agents/android-env` and generates the ignored Android project with Expo. Gradle worker limits alone do not constrain Ninja or Metro: retain the script's CMake job pool, single Metro worker and separate bundle/source, R8 and assembly/lint heap budgets. Keep optimization, resource shrinking and vital lint enabled.
 - Output is `.amp/in/artifacts/strata-test-<version>-arm64-v8a.apk`, with embedded Hermes and no Metro/EAS account required. The builder checks signature, 16 KiB ZIP alignment and archive integrity. It uses the template debug key for personal testing, not production signing or a store release.
 - A phone update needs the same package and signer; install over the existing Strata Test app to preserve data. Do not uninstall, clear data or reset Health Connect permissions as a troubleshooting shortcut. No phone install, release or publication is implied by building an APK.

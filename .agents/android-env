@@ -1,5 +1,13 @@
 # Sourced by setup, the APK builder and repository-scoped login shells.
-export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+if [[ -z "${JAVA_HOME:-}" || ! -x "$JAVA_HOME/bin/javac" ]]; then
+  if ! _strata_javac="$(command -v javac)"; then
+    printf 'A JDK is required; run ./.agents/setup first.\n' >&2
+    return 1
+  fi
+  JAVA_HOME="$(dirname -- "$(dirname -- "$(readlink -f -- "$_strata_javac")")")"
+  unset _strata_javac
+fi
+export JAVA_HOME
 export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/.local/share/android-sdk}}"
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 

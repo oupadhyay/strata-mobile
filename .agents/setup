@@ -7,7 +7,8 @@ log() { printf '\n[%ss] %s\n' "$SECONDS" "$*"; }
 
 log "Checking Android build prerequisites"
 missing=()
-for package in openjdk-17-jdk-headless ca-certificates curl unzip; do
+# Debian 12's default JDK is 17; Debian 13's is 21. Both run this project's Gradle/AGP.
+for package in default-jdk-headless ca-certificates curl unzip; do
   if [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)" != "install ok installed" ]]; then
     missing+=("$package")
   fi
